@@ -16,13 +16,17 @@ class TransformersLLMProvider(LLMProvider):
     def _ensure_loaded(self) -> None:
         if self.demo_mode or self._model is not None:
             return
+        import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_name, trust_remote_code=True)
+        has_accelerator = torch.cuda.is_available() or (getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available())
         self._model = AutoModelForCausalLM.from_pretrained(
             self.model_name,
             trust_remote_code=True,
-            device_map='cpu',
+            device_map='auto' if has_accelerator else 'cpu',
+            torch_dtype='auto' if has_accelerator else None,
+            low_cpu_mem_usage=True,
         )
 
     def _build_prompt(self, messages: Sequence[ChatTurn], system_prompt: str):
@@ -71,7 +75,6 @@ class TransformersLLMProvider(LLMProvider):
 
         from transformers import TextIteratorStreamer
 
-        input_ids = self._build_prompt(messages, system_prompt)
         streamer = TextIteratorStreamer(self._tokenizer, skip_prompt=True, skip_special_tokens=True)
         model_inputs = self._build_prompt(messages, system_prompt)
         model_inputs = {k: v.to(self._model.device) for k, v in model_inputs.items()}

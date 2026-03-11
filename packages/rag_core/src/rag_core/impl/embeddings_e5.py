@@ -34,7 +34,16 @@ class MultilingualE5Embedder(Embedder):
             return self._model
         try:
             from sentence_transformers import SentenceTransformer
-            self._model = SentenceTransformer(self.model_name, device='cpu')
+            import torch
+
+            if torch.cuda.is_available():
+                device = 'cuda'
+            elif getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available():
+                device = 'mps'
+            else:
+                device = 'cpu'
+
+            self._model = SentenceTransformer(self.model_name, device=device)
             return self._model
         except Exception:
             if self.allow_hash_fallback:
