@@ -13,10 +13,9 @@ COPY docs /app/docs
 COPY docker /app/docker
 COPY README.md /app/README.md
 
-RUN python3 -m pip install -U pip \
-  && python3 -m venv /app/.venv \
-  && /app/.venv/bin/pip install -U pip \
-  && /app/.venv/bin/pip install -e '/app/packages/rag_core[serve]' -e /app/apps/api
+RUN python3 -m venv /app/.venv \
+  && /app/.venv/bin/python -m pip install -U pip setuptools wheel \
+  && /app/.venv/bin/python -m pip install -e '/app/packages/rag_core[serve]' -e /app/apps/api
 ENV PATH="/app/.venv/bin:${PATH}"
 
 WORKDIR /app/apps/web
