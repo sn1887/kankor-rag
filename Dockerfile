@@ -11,7 +11,6 @@ COPY scripts /app/scripts
 COPY data /app/data
 COPY docs /app/docs
 COPY docker /app/docker
-COPY .env.example /app/.env.example
 COPY README.md /app/README.md
 
 RUN python3 -m pip install -U pip &&     python3 -m pip install -e '/app/packages/rag_core[serve]' -e /app/apps/api
