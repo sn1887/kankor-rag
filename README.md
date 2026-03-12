@@ -1,13 +1,3 @@
----
-title: Kankor RAG Space
-emoji: 📚
-colorFrom: indigo
-colorTo: blue
-sdk: docker
-app_port: 7860
-pinned: false
----
-
 # Kankor RAG Space
 
 A modular Retrieval-Augmented Generation (RAG) system for Afghanistan's Kankor exam content.
