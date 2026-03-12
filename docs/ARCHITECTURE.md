@@ -2,13 +2,13 @@
 
 ## Request flow
 
-1. User types a question in the Next.js UI.
-2. Browser posts to `/api/chat`.
-3. Next.js proxies to the internal FastAPI service.
-4. FastAPI extracts the latest user question and passes it to `RAGPipeline`.
-5. The pipeline embeds the query, runs FAISS similarity search, packages source metadata, builds a grounded prompt, and streams generated text tokens.
-6. FastAPI emits SSE events: `sources`, `delta`, `done`.
-7. The web app renders the answer and source panel incrementally.
+1. User chats through OpenWebUI (default) or the optional Next.js UI.
+2. OpenWebUI calls FastAPI OpenAI-compatible endpoints (`/v1/models`, `/v1/chat/completions`) or Next.js proxies to `/v1/chat/stream`.
+3. FastAPI extracts the latest user question and passes it to `RAGPipeline`.
+4. The pipeline embeds the query, runs FAISS similarity search, packages source metadata, builds a grounded prompt, and streams generated text tokens.
+5. Embedding and LLM adapters are selected by env-driven backend settings (`hash` / `e5` / `openai` and `transformers` / `openai`).
+6. FastAPI streams OpenAI-style chunks for OpenWebUI or custom SSE events for the Next.js app.
+7. The selected UI renders the answer incrementally.
 
 ## Why this shape works on free tier
 

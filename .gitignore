@@ -20,6 +20,7 @@ yarn-error.log
 .env
 .env.local
 .env.*
+docker/.env
 coverage/
 dist/
 build/

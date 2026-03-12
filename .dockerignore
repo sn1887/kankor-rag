@@ -5,3 +5,7 @@ node_modules
 .venv
 .next/cache
 *.log
+.env
+.env.local
+.env.*
+docker/.env

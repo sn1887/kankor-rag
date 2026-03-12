@@ -27,5 +27,5 @@ RUN npm run build
 
 WORKDIR /app
 RUN chmod +x /app/docker/start.sh
-EXPOSE 7860
+EXPOSE 7860 8000
 CMD ["bash", "/app/docker/start.sh"]

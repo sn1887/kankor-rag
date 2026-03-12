@@ -6,6 +6,7 @@ export BACKEND_PORT="${BACKEND_PORT:-8000}"
 export PORT="${PORT:-7860}"
 export HOST="${HOST:-0.0.0.0}"
 export RAG_ARTIFACT_DIR="${RAG_ARTIFACT_DIR:-/tmp/kankor-artifacts}"
+export RAG_UI_INTERFACE="${RAG_UI_INTERFACE:-openwebui}"
 
 if [[ "${RAG_DOWNLOAD_ON_BOOT:-false}" == "true" ]] && [[ -n "${RAG_DATASET_REPO_ID:-}" ]]; then
   mkdir -p "${RAG_ARTIFACT_DIR}"
@@ -31,4 +32,10 @@ BOOTPY
   fi
 fi
 
-exec /usr/bin/supervisord -c /app/docker/supervisord.conf
+if [[ "${RAG_UI_INTERFACE}" == "nextjs" ]]; then
+  SUPERVISORD_CONFIG="/app/docker/supervisord.conf"
+else
+  SUPERVISORD_CONFIG="/app/docker/supervisord.api.conf"
+fi
+
+exec /usr/bin/supervisord -c "${SUPERVISORD_CONFIG}"

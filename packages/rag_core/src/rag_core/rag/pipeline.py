@@ -16,15 +16,17 @@ class RAGPipeline:
         return [hit for hit in hits if hit.score >= self.min_score]
     def _fallback_response(self, question: str) -> str:
         return 'I could not find strong supporting evidence in the current indexed corpus for this question. Please try a more specific phrasing, switch to a closer subject category, or refresh the corpus/index version. ' + f'Current corpus version: {self.corpus_version}. Question: {question}'
-    def stream_answer(self, *, question: str, history: Sequence[ChatTurn]) -> Iterator[dict]:
+    def stream_answer(self, *, question: str, history: Sequence[ChatTurn], max_new_tokens: int | None = None, temperature: float | None = None) -> Iterator[dict]:
         hits = self.retrieve(question)
         yield {'type': 'sources', 'data': hits_to_source_payload(hits, self.corpus_version)}
         if not hits:
             for token in self._fallback_response(question).split(' '):
                 yield {'type': 'delta', 'data': {'text': token + ' '}}
             return
+        resolved_max_new_tokens = self.max_new_tokens if max_new_tokens is None else max(1, int(max_new_tokens))
+        resolved_temperature = self.temperature if temperature is None else max(0.0, float(temperature))
         system_prompt = build_system_prompt(question=question, hits=hits, corpus_version=self.corpus_version, default_language=self.default_language)
         context_block = build_context_block(hits)
         messages = build_chat_messages(question=question, history=history, context_block=context_block)
-        for token in self.llm.stream_chat(messages=messages, system_prompt=system_prompt, max_new_tokens=self.max_new_tokens, temperature=self.temperature):
+        for token in self.llm.stream_chat(messages=messages, system_prompt=system_prompt, max_new_tokens=resolved_max_new_tokens, temperature=resolved_temperature):
             yield {'type': 'delta', 'data': {'text': token}}
