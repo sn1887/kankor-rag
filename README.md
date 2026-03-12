@@ -31,6 +31,7 @@ Run OpenWebUI + API together (recommended):
 
 ```bash
 cd docker
+cp .env.example .env
 RAG_OPENAI_COMPAT_API_KEY=changeme docker compose -f docker-compose.openwebui.yml up --build
 ```
 
@@ -53,7 +54,7 @@ Start the API:
 
 ```bash
 export RAG_INDEX_PATH=data/sample_index/index.faiss
-export RAG_DOCSTORE_PATH=data/sample_index/metadata.json
+export RAG_DOCSTORE_PATH=data/sample_index/metadata.jsonl
 export RAG_EMBEDDING_BACKEND=hash
 export RAG_DEMO_MODE=true
 uvicorn kankor_api.main:app --host 127.0.0.1 --port 8000
@@ -85,7 +86,7 @@ Run API with OpenAI generation + OpenAI query embeddings:
 
 ```bash
 export RAG_INDEX_PATH=data/index/kankor_openai/index.faiss
-export RAG_DOCSTORE_PATH=data/index/kankor_openai/metadata.json
+export RAG_DOCSTORE_PATH=data/index/kankor_openai/metadata.jsonl
 export RAG_LLM_BACKEND=openai
 export RAG_EMBEDDING_BACKEND=openai
 export RAG_OPENAI_MODEL_ID=gpt-4o-mini
@@ -140,8 +141,9 @@ python scripts/build_index.py \
 Key environment variables:
 
 - `RAG_INDEX_PATH` and `RAG_DOCSTORE_PATH`: FAISS and metadata paths
+- `RAG_VECTOR_STORE_BACKEND`: vector backend key (`faiss`) or `module.path:factory`
 - `RAG_LLM_BACKEND`: `transformers` or `openai`
-- `RAG_EMBEDDING_BACKEND`: `hash`, `e5`, or `openai`
+- `RAG_EMBEDDING_BACKEND`: `hash`, `e5`, `openai`, or `module.path:factory`
 - `RAG_MODEL_ID`: Hugging Face model id for local transformers generation
 - `RAG_EMBEDDING_MODEL_ID`: local E5 embedding model id
 - `RAG_OPENAI_MODEL_ID`: OpenAI model id for chat generation
@@ -151,11 +153,16 @@ Key environment variables:
 - `RAG_OPENAI_TIMEOUT_SECONDS`: timeout for OpenAI requests
 - `RAG_OPENAI_EMBEDDING_DIMENSIONS`: optional output dimensions for OpenAI embeddings
 - `RAG_OPENAI_COMPAT_API_KEY`: optional Bearer token for `/v1/models` and `/v1/chat/completions`
+- `RAG_CHAT_API_KEY`: optional Bearer token for `/v1/chat/stream` (falls back to `RAG_OPENAI_COMPAT_API_KEY`)
+- `RAG_ALLOW_HASH_EMBEDDER_FALLBACK`: `false` by default; set `true` only for explicit degraded-mode tolerance
+- `RAG_MAX_NEW_TOKENS_HARD_LIMIT`: hard upper bound enforced on per-request `max_tokens`
+- `RAG_TEMPERATURE_MIN` / `RAG_TEMPERATURE_MAX`: allowed request temperature range
 - `RAG_UI_INTERFACE`: `openwebui` (default, API-only container) or `nextjs` (runs API + Next.js in one container)
 - `RAG_DEMO_MODE`: set `true` to bypass local model generation
 - `RAG_GENERATION_MODE`: `sample`, `greedy`, or `contrastive`
 - `RAG_CONTRASTIVE_PENALTY_ALPHA`: contrastive decoding parameter
 - `RAG_CONTRASTIVE_TOP_K`: contrastive decoding parameter
+- `BACKEND_API_KEY` (Next.js only): forwards `Authorization: Bearer ...` to backend `/v1/chat/stream`
 
 Contrastive decoding requires remote generation code from:
 `transformers-community/contrastive-search`

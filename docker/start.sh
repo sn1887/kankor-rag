@@ -25,10 +25,10 @@ BOOTPY
 
   if [[ -n "${RAG_DATASET_SUBFOLDER:-}" ]]; then
     export RAG_INDEX_PATH="${RAG_INDEX_PATH:-${RAG_ARTIFACT_DIR}/${RAG_DATASET_SUBFOLDER}/index.faiss}"
-    export RAG_DOCSTORE_PATH="${RAG_DOCSTORE_PATH:-${RAG_ARTIFACT_DIR}/${RAG_DATASET_SUBFOLDER}/metadata.json}"
+    export RAG_DOCSTORE_PATH="${RAG_DOCSTORE_PATH:-${RAG_ARTIFACT_DIR}/${RAG_DATASET_SUBFOLDER}/metadata.jsonl}"
   else
     export RAG_INDEX_PATH="${RAG_INDEX_PATH:-${RAG_ARTIFACT_DIR}/index.faiss}"
-    export RAG_DOCSTORE_PATH="${RAG_DOCSTORE_PATH:-${RAG_ARTIFACT_DIR}/metadata.json}"
+    export RAG_DOCSTORE_PATH="${RAG_DOCSTORE_PATH:-${RAG_ARTIFACT_DIR}/metadata.jsonl}"
   fi
 fi
 

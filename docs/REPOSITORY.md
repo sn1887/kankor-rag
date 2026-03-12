@@ -47,6 +47,8 @@ You can swap the following without rewriting the whole repository:
 4. corpus source
 5. prompt/policy layer
 
+Backends can be selected by built-in key (for example `openai`, `e5`, `faiss`) or by custom callable path (`module.path:factory`).
+
 ## Artifact strategy
 
 The application repo should stay small. Large artifacts should live in separate Hugging Face dataset/model repositories and be downloaded on boot or mounted through cached Hub downloads.

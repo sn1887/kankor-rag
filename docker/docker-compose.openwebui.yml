@@ -9,13 +9,15 @@ services:
       BACKEND_PORT: 8000
       RAG_OPENAI_COMPAT_API_KEY: ${RAG_OPENAI_COMPAT_API_KEY:-changeme}
       RAG_INDEX_PATH: ${RAG_INDEX_PATH:-/app/data/sample_index/index.faiss}
-      RAG_DOCSTORE_PATH: ${RAG_DOCSTORE_PATH:-/app/data/sample_index/metadata.json}
+      RAG_DOCSTORE_PATH: ${RAG_DOCSTORE_PATH:-/app/data/sample_index/metadata.jsonl}
+      RAG_VECTOR_STORE_BACKEND: ${RAG_VECTOR_STORE_BACKEND:-faiss}
       RAG_LLM_BACKEND: ${RAG_LLM_BACKEND:-openai}
       RAG_EMBEDDING_BACKEND: ${RAG_EMBEDDING_BACKEND:-hash}
       RAG_OPENAI_MODEL_ID: ${RAG_OPENAI_MODEL_ID:-gpt-4o-mini}
       RAG_OPENAI_EMBEDDING_MODEL_ID: ${RAG_OPENAI_EMBEDDING_MODEL_ID:-text-embedding-3-small}
       RAG_OPENAI_API_KEY: ${RAG_OPENAI_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      RAG_MAX_NEW_TOKENS_HARD_LIMIT: ${RAG_MAX_NEW_TOKENS_HARD_LIMIT:-1024}
       RAG_DEMO_MODE: ${RAG_DEMO_MODE:-true}
     volumes:
       - ../data:/app/data:ro
