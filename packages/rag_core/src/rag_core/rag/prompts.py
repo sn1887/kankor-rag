@@ -22,7 +22,9 @@ def build_system_prompt(*, question: str, hits: Sequence[Hit], corpus_version: s
         f'The current corpus version is {corpus_version}. '
         f'Respond in {language_rule}. '
         'Prefer concise, instructive explanations and step-by-step reasoning for worked examples. '
-        'Do not invent answer keys. Do not claim certainty when the sources are incomplete.'
+        'Do not invent answer keys. Do not claim certainty when the sources are incomplete. '
+        'Format the response as Markdown: short paragraphs, simple bullet lists when helpful, and fenced code blocks for formulas or structured steps. '
+        'Do not output raw HTML.'
     )
 
 
