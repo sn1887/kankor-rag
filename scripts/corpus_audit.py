@@ -7,6 +7,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from rag_core.util.text_splitter import split_text
+
 
 MOJIBAKE_RE = re.compile(r"[ÃØÙÐÑÆ]{2,}|Ã.|Ø.|Ù.|Ð.|Ñ.|Æ.")
 REPLACEMENT_RE = re.compile("\ufffd")
@@ -30,21 +32,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--show-samples", type=int, default=5, help="Number of sample suspicious records to print.")
     return parser.parse_args()
-
-
-def split_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
-    words = text.split()
-    if not words:
-        return []
-    output: list[str] = []
-    start = 0
-    while start < len(words):
-        end = min(len(words), start + chunk_size)
-        output.append(" ".join(words[start:end]))
-        if end == len(words):
-            break
-        start = max(0, end - chunk_overlap)
-    return output
 
 
 def percentile(values: list[int], p: int) -> int:
