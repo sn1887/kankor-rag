@@ -10,18 +10,18 @@ pinned: false
 
 # Kankor RAG Space
 
-A modular Retrieval-Augmented Generation (RAG) repository for Afghanistan's Kankor exam, designed from the provided blueprint for a Hugging Face Docker Space on the free CPU tier.
+A modular Retrieval-Augmented Generation (RAG) system for Afghanistan's Kankor exam content.
+The repository is structured for local development and deployment as a Hugging Face Docker Space.
 
-## Stack
+## Architecture
 
-- Next.js chat UI with streaming responses and a sources panel
-- FastAPI backend that performs retrieval and streams answer tokens
-- Reusable `rag_core` package with swappable interfaces for LLMs, embeddings, vector stores, and corpus sources
-- Offline tooling to build FAISS indexes from a versioned corpus
-- Sample Kankor corpus for local smoke tests
-- Docker wiring for a single-container Hugging Face Space
+- Next.js frontend (`apps/web`) with streaming chat UI and source panel
+- FastAPI backend (`apps/api`) with SSE streaming endpoint
+- Reusable core package (`packages/rag_core`) for embeddings, vector store, and LLM providers
+- Offline data pipeline (`scripts/`) for PDF ingestion, corpus audit, and FAISS index build
+- Docker startup (`docker/`) for running web + API in one container
 
-## Quick start
+## Local Setup
 
 ```bash
 python -m venv .venv
@@ -34,13 +34,18 @@ npm install
 cd ../..
 ```
 
-Build a tiny demo index without downloading a multilingual embedding model:
+## Quick Demo (Local)
+
+Build a small demo index with hashing embeddings:
 
 ```bash
-python scripts/build_index.py   --input data/sample_corpus/kankor_sample.jsonl   --output-dir data/sample_index   --embedding-backend hash
+python scripts/build_index.py \
+  --input data/sample_corpus/kankor_sample.jsonl \
+  --output-dir data/sample_index \
+  --embedding-backend hash
 ```
 
-Run the backend:
+Start the API:
 
 ```bash
 export RAG_INDEX_PATH=data/sample_index/index.faiss
@@ -50,41 +55,81 @@ export RAG_DEMO_MODE=true
 uvicorn kankor_api.main:app --host 127.0.0.1 --port 8000
 ```
 
-Run the web app:
+Start the web app in a second terminal:
 
 ```bash
 cd apps/web
 BACKEND_URL=http://127.0.0.1:8000 npm run dev
 ```
 
-## High-fidelity PDF extraction
+## Corpus Pipeline
 
-For difficult textbooks with broken text layers, multi-column layouts, tables, or equations, the repo now supports an optional `marker` extractor in `scripts/pdf_to_jsonl.py`. Marker is the preferred upgrade over wiring Surya directly, since it already uses layout-aware OCR and renders markdown with tables and math preserved.
+### 1) Extract PDFs to JSONL
 
-Install Marker:
-
-```bash
-python -m pip install marker-pdf
-```
-
-Run the extractor with Marker:
+Extract textbook content from `data/raw_pdfs`:
 
 ```bash
 python scripts/pdf_to_jsonl.py \
   --input-dir data/raw_pdfs \
   --output data/corpus/kankor_corpus.jsonl \
-  --extractor marker \
-  --marker-force-ocr
+  --corpus-version kankor-corpus-2026.03 \
+  --ocr-fallback
 ```
 
-If you want to stay with the lighter built-in pipeline, `--extractor hybrid` remains the default and now supports stronger OCR controls such as `--ocr-psm`, `--ocr-oem`, `--extract-tables`, and `--bidi-native`.
+Useful outputs:
+- `data/corpus/kankor_corpus.jsonl`
+- `data/corpus/unreadable_pages.jsonl`
+- `data/corpus/page_extraction_audit.jsonl`
 
-## Production-shaped defaults
+### 2) Audit corpus quality
 
-- LLM: `Qwen/Qwen3.5-2B`
-- Embeddings: `intfloat/multilingual-e5-small`
-- Vector store: FAISS loaded from prebuilt artifacts
-- Corpus policy: versioned, auditable, multilingual, source-first
+```bash
+python scripts/corpus_audit.py \
+  --input data/corpus/kankor_corpus.jsonl \
+  --chunk-size 140 \
+  --chunk-overlap 24 \
+  --show-samples 8
+```
+
+### 3) Build FAISS index
+
+```bash
+python scripts/build_index.py \
+  --input data/corpus/kankor_corpus.jsonl \
+  --output-dir data/index/kankor_e5_base \
+  --embedding-backend e5 \
+  --embedding-model-id intfloat/multilingual-e5-base \
+  --embedding-batch-size 16 \
+  --corpus-version kankor-corpus@2026.03
+```
+
+## Runtime Configuration
+
+Key environment variables:
+
+- `RAG_INDEX_PATH` and `RAG_DOCSTORE_PATH`: FAISS and metadata paths
+- `RAG_MODEL_ID`: Hugging Face model id for local generation
+- `RAG_EMBEDDING_MODEL_ID`: embedding model id
+- `RAG_DEMO_MODE`: set `true` to bypass local model generation
+- `RAG_GENERATION_MODE`: `sample`, `greedy`, or `contrastive`
+- `RAG_CONTRASTIVE_PENALTY_ALPHA`: contrastive decoding parameter
+- `RAG_CONTRASTIVE_TOP_K`: contrastive decoding parameter
+
+Contrastive decoding requires remote generation code from:
+`transformers-community/contrastive-search`
+
+## Hugging Face Space Deployment
+
+The Docker entrypoint supports artifact download at startup:
+
+- `RAG_DOWNLOAD_ON_BOOT=true`
+- `RAG_DATASET_REPO_ID=<hf-dataset-repo>`
+- `RAG_DATASET_SUBFOLDER=<optional-subfolder>`
+- `HF_TOKEN=<optional, for private dataset>`
+
+When enabled, the container downloads index artifacts and sets:
+- `RAG_INDEX_PATH`
+- `RAG_DOCSTORE_PATH`
 
 ## Docs
 
