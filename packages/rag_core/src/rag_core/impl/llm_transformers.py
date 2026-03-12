@@ -7,9 +7,21 @@ from rag_core.types import ChatTurn
 
 
 class TransformersLLMProvider(LLMProvider):
-    def __init__(self, model_name: str, demo_mode: bool = False) -> None:
+    def __init__(
+        self,
+        model_name: str,
+        demo_mode: bool = False,
+        generation_mode: str = 'sample',
+        contrastive_penalty_alpha: float = 0.6,
+        contrastive_top_k: int = 4,
+    ) -> None:
         self.model_name = model_name
         self.demo_mode = demo_mode
+        self.generation_mode = generation_mode.lower().strip()
+        if self.generation_mode not in {'sample', 'contrastive', 'greedy'}:
+            self.generation_mode = 'sample'
+        self.contrastive_penalty_alpha = max(0.0, float(contrastive_penalty_alpha))
+        self.contrastive_top_k = max(1, int(contrastive_top_k))
         self._tokenizer = None
         self._model = None
 
@@ -83,9 +95,22 @@ class TransformersLLMProvider(LLMProvider):
             **model_inputs,
             'streamer': streamer,
             'max_new_tokens': max_new_tokens,
-            'do_sample': temperature > 0,
-            'temperature': max(temperature, 0.01),
         }
+        if self.generation_mode == 'contrastive':
+            generate_kwargs.update(
+                {
+                    'do_sample': False,
+                    'penalty_alpha': self.contrastive_penalty_alpha,
+                    'top_k': self.contrastive_top_k,
+                }
+            )
+        elif self.generation_mode == 'greedy':
+            generate_kwargs.update({'do_sample': False})
+        else:
+            do_sample = temperature > 0
+            generate_kwargs.update({'do_sample': do_sample})
+            if do_sample:
+                generate_kwargs.update({'temperature': max(temperature, 0.01)})
 
         thread = Thread(target=self._model.generate, kwargs=generate_kwargs, daemon=True)
         thread.start()
