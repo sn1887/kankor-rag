@@ -1,10 +1,11 @@
 from __future__ import annotations
 import json
 from typing import List, Literal
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from rag_core.types import ChatTurn
+from ..auth import require_bearer_api_key
 from ..wiring import get_app_state
 
 router = APIRouter(prefix='/v1/chat', tags=['chat'])
@@ -17,15 +18,36 @@ class ChatRequest(BaseModel):
     messages: List[MessageIn]
 
 @router.post('/stream')
-def stream_chat(request: ChatRequest) -> StreamingResponse:
+def stream_chat(
+    request: ChatRequest,
+    authorization: str | None = Header(default=None, alias='Authorization'),
+) -> StreamingResponse:
     if not request.messages:
         raise HTTPException(status_code=400, detail='messages must not be empty')
-    user_messages = [message for message in request.messages if message.role == 'user']
-    if not user_messages:
+
+    question_index: int | None = None
+    for idx in range(len(request.messages) - 1, -1, -1):
+        if request.messages[idx].role == 'user':
+            question_index = idx
+            break
+    if question_index is None:
         raise HTTPException(status_code=400, detail='at least one user message is required')
-    question = user_messages[-1].content
-    history = [ChatTurn(role=message.role, content=message.content) for message in request.messages[:-1]]
-    pipeline = get_app_state().pipeline
+    question = request.messages[question_index].content.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail='latest user message must include text content')
+
+    history = [
+        ChatTurn(role=message.role, content=message.content.strip())
+        for message in request.messages[:question_index]
+        if message.content.strip()
+    ]
+    state = get_app_state()
+    require_bearer_api_key(
+        authorization=authorization,
+        expected_token=state.settings.resolved_chat_api_key,
+        endpoint_label="chat stream endpoint",
+    )
+    pipeline = state.pipeline
 
     def event_stream():
         try:

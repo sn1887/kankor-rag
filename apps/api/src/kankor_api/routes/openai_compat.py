@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from rag_core.types import ChatTurn
 
+from ..auth import require_bearer_api_key
 from ..wiring import get_app_state
 
 router = APIRouter(prefix='/v1', tags=['openai-compat'])
@@ -71,14 +72,11 @@ def _extract_question_and_history(messages: list[OpenAIMessageIn]) -> tuple[str,
 
 def _check_openai_compat_key(authorization: str | None) -> None:
     settings = get_app_state().settings
-    expected = (settings.rag_openai_compat_api_key or '').strip()
-    if not expected:
-        return
-    token = ''
-    if authorization and authorization.lower().startswith('bearer '):
-        token = authorization[7:].strip()
-    if token != expected:
-        raise HTTPException(status_code=401, detail='Invalid API key for OpenAI-compatible endpoint')
+    require_bearer_api_key(
+        authorization=authorization,
+        expected_token=settings.rag_openai_compat_api_key,
+        endpoint_label="OpenAI-compatible endpoint",
+    )
 
 
 def _active_model_id() -> str:
@@ -121,6 +119,28 @@ def chat_completions(
     model_name = request.model or _active_model_id()
     max_new_tokens = request.max_tokens if request.max_tokens is not None else pipeline.max_new_tokens
     temperature = request.temperature if request.temperature is not None else pipeline.temperature
+    if request.max_tokens is not None and request.max_tokens > pipeline.max_new_tokens_limit:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"max_tokens exceeds limit ({pipeline.max_new_tokens_limit}). "
+                "Reduce max_tokens or increase RAG_MAX_NEW_TOKENS_HARD_LIMIT."
+            ),
+        )
+    if request.temperature is not None and not (
+        pipeline.temperature_min <= request.temperature <= pipeline.temperature_max
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"temperature must be between {pipeline.temperature_min} "
+                f"and {pipeline.temperature_max}."
+            ),
+        )
+    max_new_tokens, temperature = pipeline.resolve_generation_params(
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+    )
 
     if request.stream:
         def event_stream():

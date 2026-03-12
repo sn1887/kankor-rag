@@ -1,6 +1,6 @@
 from __future__ import annotations
 from collections.abc import Iterator, Sequence
-from threading import Thread
+from threading import Lock, Thread
 
 from rag_core.contracts.llm import LLMProvider
 from rag_core.types import ChatTurn
@@ -24,6 +24,7 @@ class TransformersLLMProvider(LLMProvider):
         self.contrastive_top_k = max(1, int(contrastive_top_k))
         self._tokenizer = None
         self._model = None
+        self._generation_lock = Lock()
 
     def _ensure_loaded(self) -> None:
         if self.demo_mode or self._model is not None:
@@ -87,34 +88,52 @@ class TransformersLLMProvider(LLMProvider):
 
         from transformers import TextIteratorStreamer
 
-        streamer = TextIteratorStreamer(self._tokenizer, skip_prompt=True, skip_special_tokens=True)
-        model_inputs = self._build_prompt(messages, system_prompt)
-        model_inputs = {k: v.to(self._model.device) for k, v in model_inputs.items()}
+        # Local transformers generation is not thread-safe on a shared model instance;
+        # serialize requests to avoid interleaved streamer output and device contention.
+        with self._generation_lock:
+            streamer = TextIteratorStreamer(self._tokenizer, skip_prompt=True, skip_special_tokens=True)
+            model_inputs = self._build_prompt(messages, system_prompt)
+            model_inputs = {k: v.to(self._model.device) for k, v in model_inputs.items()}
 
-        generate_kwargs = {
-            **model_inputs,
-            'streamer': streamer,
-            'max_new_tokens': max_new_tokens,
-        }
-        if self.generation_mode == 'contrastive':
-            generate_kwargs.update(
-                {
-                    'do_sample': False,
-                    'penalty_alpha': self.contrastive_penalty_alpha,
-                    'top_k': self.contrastive_top_k,
-                    'custom_generate': 'transformers-community/contrastive-search',
-                    'trust_remote_code': True,
-                }
-            )
-        elif self.generation_mode == 'greedy':
-            generate_kwargs.update({'do_sample': False})
-        else:
-            do_sample = temperature > 0
-            generate_kwargs.update({'do_sample': do_sample})
-            if do_sample:
-                generate_kwargs.update({'temperature': max(temperature, 0.01)})
+            generate_kwargs = {
+                **model_inputs,
+                'streamer': streamer,
+                'max_new_tokens': max_new_tokens,
+            }
+            if self.generation_mode == 'contrastive':
+                generate_kwargs.update(
+                    {
+                        'do_sample': False,
+                        'penalty_alpha': self.contrastive_penalty_alpha,
+                        'top_k': self.contrastive_top_k,
+                        'custom_generate': 'transformers-community/contrastive-search',
+                        'trust_remote_code': True,
+                    }
+                )
+            elif self.generation_mode == 'greedy':
+                generate_kwargs.update({'do_sample': False})
+            else:
+                do_sample = temperature > 0
+                generate_kwargs.update({'do_sample': do_sample})
+                if do_sample:
+                    generate_kwargs.update({'temperature': max(temperature, 0.01)})
 
-        thread = Thread(target=self._model.generate, kwargs=generate_kwargs, daemon=True)
-        thread.start()
-        for text in streamer:
-            yield text
+            generation_error: list[BaseException] = []
+
+            def _run_generate() -> None:
+                try:
+                    self._model.generate(**generate_kwargs)
+                except BaseException as exc:  # pragma: no cover - defensive runtime safety
+                    generation_error.append(exc)
+                finally:
+                    # Ensure the iterator terminates even when generation crashes.
+                    streamer.on_finalized_text("", stream_end=True)
+
+            thread = Thread(target=_run_generate, daemon=True)
+            thread.start()
+            for text in streamer:
+                yield text
+            thread.join()
+
+            if generation_error:
+                raise RuntimeError("Transformers generation failed") from generation_error[0]

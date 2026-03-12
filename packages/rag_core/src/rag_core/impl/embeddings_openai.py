@@ -5,6 +5,7 @@ from collections.abc import Sequence
 import numpy as np
 
 from rag_core.contracts.embeddings import Embedder
+from rag_core.impl.openai_common import build_openai_client
 
 
 class OpenAIEmbedder(Embedder):
@@ -26,20 +27,11 @@ class OpenAIEmbedder(Embedder):
     def _get_client(self):
         if self._client is not None:
             return self._client
-
-        try:
-            from openai import OpenAI
-        except ImportError as exc:
-            raise RuntimeError('OpenAI provider requires the "openai" package. Install rag_core[serve].') from exc
-
-        kwargs: dict[str, object] = {}
-        if self.api_key:
-            kwargs['api_key'] = self.api_key
-        if self.base_url:
-            kwargs['base_url'] = self.base_url
-        if self.timeout_seconds > 0:
-            kwargs['timeout'] = self.timeout_seconds
-        self._client = OpenAI(**kwargs)
+        self._client = build_openai_client(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            timeout_seconds=self.timeout_seconds,
+        )
         return self._client
 
     def embed_documents(self, texts: Sequence[str]) -> np.ndarray:

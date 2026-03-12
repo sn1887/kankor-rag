@@ -14,18 +14,23 @@ class Settings(BaseSettings):
     rag_embedding_model_id: str = Field(default='intfloat/multilingual-e5-small', alias='RAG_EMBEDDING_MODEL_ID')
     rag_openai_embedding_model_id: str = Field(default='text-embedding-3-small', alias='RAG_OPENAI_EMBEDDING_MODEL_ID')
     rag_embedding_backend: str = Field(default='e5', alias='RAG_EMBEDDING_BACKEND')
-    rag_allow_hash_embedder_fallback: bool = Field(default=True, alias='RAG_ALLOW_HASH_EMBEDDER_FALLBACK')
+    rag_allow_hash_embedder_fallback: bool = Field(default=False, alias='RAG_ALLOW_HASH_EMBEDDER_FALLBACK')
     rag_openai_api_key: str | None = Field(default=None, alias='RAG_OPENAI_API_KEY')
     rag_openai_base_url: str | None = Field(default=None, alias='RAG_OPENAI_BASE_URL')
     rag_openai_timeout_seconds: float = Field(default=120.0, alias='RAG_OPENAI_TIMEOUT_SECONDS')
     rag_openai_embedding_dimensions: int | None = Field(default=None, alias='RAG_OPENAI_EMBEDDING_DIMENSIONS')
     rag_openai_compat_api_key: str | None = Field(default=None, alias='RAG_OPENAI_COMPAT_API_KEY')
+    rag_chat_api_key: str | None = Field(default=None, alias='RAG_CHAT_API_KEY')
     rag_index_path: str = Field(default='data/sample_index/index.faiss', alias='RAG_INDEX_PATH')
-    rag_docstore_path: str = Field(default='data/sample_index/metadata.json', alias='RAG_DOCSTORE_PATH')
+    rag_docstore_path: str = Field(default='data/sample_index/metadata.jsonl', alias='RAG_DOCSTORE_PATH')
+    rag_vector_store_backend: str = Field(default='faiss', alias='RAG_VECTOR_STORE_BACKEND')
     rag_top_k: int = Field(default=5, alias='RAG_TOP_K')
     rag_min_score: float = Field(default=0.15, alias='RAG_MIN_SCORE')
     rag_max_new_tokens: int = Field(default=256, alias='RAG_MAX_NEW_TOKENS')
+    rag_max_new_tokens_hard_limit: int = Field(default=1024, alias='RAG_MAX_NEW_TOKENS_HARD_LIMIT')
     rag_temperature: float = Field(default=0.2, alias='RAG_TEMPERATURE')
+    rag_temperature_min: float = Field(default=0.0, alias='RAG_TEMPERATURE_MIN')
+    rag_temperature_max: float = Field(default=2.0, alias='RAG_TEMPERATURE_MAX')
     rag_generation_mode: str = Field(default='sample', alias='RAG_GENERATION_MODE')
     rag_contrastive_penalty_alpha: float = Field(default=0.6, alias='RAG_CONTRASTIVE_PENALTY_ALPHA')
     rag_contrastive_top_k: int = Field(default=4, alias='RAG_CONTRASTIVE_TOP_K')
@@ -36,3 +41,11 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> List[str]:
         return [value.strip() for value in self.cors_allow_origins.split(',') if value.strip()]
+
+    @property
+    def resolved_chat_api_key(self) -> str | None:
+        chat_key = (self.rag_chat_api_key or '').strip()
+        if chat_key:
+            return chat_key
+        compat_key = (self.rag_openai_compat_api_key or '').strip()
+        return compat_key or None
