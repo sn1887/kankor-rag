@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 from rag_core.impl.corpus_hf_dataset import HFDatasetCorpusSource
 from rag_core.impl.embeddings_e5 import HashingEmbedder, MultilingualE5Embedder
+from rag_core.impl.embeddings_openai import OpenAIEmbedder
 from rag_core.impl.vector_faiss import FaissVectorStore
 from rag_core.util.text_splitter import chunk_documents
 
@@ -14,7 +15,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--split', default='train')
     parser.add_argument('--output-dir', required=True)
     parser.add_argument('--embedding-model-id', default='intfloat/multilingual-e5-small')
-    parser.add_argument('--embedding-backend', choices=['e5', 'hash'], default='e5')
+    parser.add_argument('--openai-embedding-model-id', default='text-embedding-3-small')
+    parser.add_argument('--embedding-backend', choices=['e5', 'hash', 'openai'], default='e5')
+    parser.add_argument('--openai-api-key', default=None, help='Optional OpenAI API key override. Defaults to OPENAI_API_KEY env var.')
+    parser.add_argument('--openai-base-url', default=None, help='Optional OpenAI-compatible base URL.')
+    parser.add_argument('--openai-timeout-seconds', type=float, default=120.0)
+    parser.add_argument('--openai-embedding-dimensions', type=int, default=None)
     parser.add_argument('--embedding-batch-size', type=int, default=128)
     parser.add_argument('--chunk-size', type=int, default=140)
     parser.add_argument('--chunk-overlap', type=int, default=24)
@@ -38,13 +44,27 @@ def main() -> None:
     source = HFDatasetCorpusSource(dataset_name=args.dataset_name, split=args.split, local_path=args.input)
     documents = list(source.load_documents())
     chunked = chunk_documents(documents, chunk_size=args.chunk_size, chunk_overlap=args.chunk_overlap)
-    embedder = HashingEmbedder() if args.embedding_backend == 'hash' else MultilingualE5Embedder(model_name=args.embedding_model_id)
+    if args.embedding_backend == 'hash':
+        embedder = HashingEmbedder()
+        selected_embedding_model = 'hash'
+    elif args.embedding_backend == 'e5':
+        embedder = MultilingualE5Embedder(model_name=args.embedding_model_id)
+        selected_embedding_model = args.embedding_model_id
+    else:
+        embedder = OpenAIEmbedder(
+            model_name=args.openai_embedding_model_id,
+            api_key=args.openai_api_key,
+            base_url=args.openai_base_url,
+            dimensions=args.openai_embedding_dimensions,
+            timeout_seconds=args.openai_timeout_seconds,
+        )
+        selected_embedding_model = args.openai_embedding_model_id
     embeddings = embed_in_batches(embedder, [doc.text for doc in chunked], args.embedding_batch_size)
     vector_store = FaissVectorStore.build(embeddings, chunked)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     vector_store.save(output_dir / 'index.faiss', output_dir / 'metadata.json')
-    manifest = {'documents': len(documents), 'chunks': len(chunked), 'embedding_backend': args.embedding_backend, 'embedding_model_id': args.embedding_model_id, 'embedding_batch_size': args.embedding_batch_size, 'corpus_version': args.corpus_version}
+    manifest = {'documents': len(documents), 'chunks': len(chunked), 'embedding_backend': args.embedding_backend, 'embedding_model_id': selected_embedding_model, 'embedding_batch_size': args.embedding_batch_size, 'corpus_version': args.corpus_version}
     (output_dir / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
 
