@@ -17,7 +17,7 @@ SCHEMA = {
         'subject_category': {'type': 'string', 'enum': ['math', 'natural_science', 'social_science', 'languages']},
         'subject': {'type': 'string'},
         'grade_band': {'type': 'string'},
-        'language': {'type': 'string', 'enum': ['ps', 'fa', 'en']},
+        'language': {'type': 'string', 'enum': ['ps', 'fa', 'ar', 'en']},
         'source_type': {'type': 'string', 'enum': ['explanation', 'definition', 'worked_example', 'practice_question']},
         'source_id': {'type': 'string'},
         'copyright': {'type': 'string'},

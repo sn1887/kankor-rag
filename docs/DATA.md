@@ -17,7 +17,7 @@ It should not rely on scraped, unverifiable answer-key dumps as the primary know
 - `subject_category` - `math`, `natural_science`, `social_science`, `languages`
 - `subject`
 - `grade_band`
-- `language` - `ps`, `fa`, `en`
+- `language` - `ps`, `fa`, `ar`, `en`
 - `source_type` - `explanation`, `definition`, `worked_example`, `practice_question`
 - `source_id`
 - `copyright`

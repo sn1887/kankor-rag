@@ -57,6 +57,28 @@ cd apps/web
 BACKEND_URL=http://127.0.0.1:8000 npm run dev
 ```
 
+## High-fidelity PDF extraction
+
+For difficult textbooks with broken text layers, multi-column layouts, tables, or equations, the repo now supports an optional `marker` extractor in `scripts/pdf_to_jsonl.py`. Marker is the preferred upgrade over wiring Surya directly, since it already uses layout-aware OCR and renders markdown with tables and math preserved.
+
+Install Marker:
+
+```bash
+python -m pip install marker-pdf
+```
+
+Run the extractor with Marker:
+
+```bash
+python scripts/pdf_to_jsonl.py \
+  --input-dir data/raw_pdfs \
+  --output data/corpus/kankor_corpus.jsonl \
+  --extractor marker \
+  --marker-force-ocr
+```
+
+If you want to stay with the lighter built-in pipeline, `--extractor hybrid` remains the default and now supports stronger OCR controls such as `--ocr-psm`, `--ocr-oem`, `--extract-tables`, and `--bidi-native`.
+
 ## Production-shaped defaults
 
 - LLM: `Qwen/Qwen3.5-2B`
