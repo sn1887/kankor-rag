@@ -102,6 +102,8 @@ class TransformersLLMProvider(LLMProvider):
                     'do_sample': False,
                     'penalty_alpha': self.contrastive_penalty_alpha,
                     'top_k': self.contrastive_top_k,
+                    'custom_generate': 'transformers-community/contrastive-search',
+                    'trust_remote_code': True,
                 }
             )
         elif self.generation_mode == 'greedy':
