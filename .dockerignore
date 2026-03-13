@@ -5,3 +5,10 @@ node_modules
 .venv
 .next/cache
 *.log
+.env
+.env.local
+.env.*
+docker/.env
+data/*
+!data/sample_corpus/
+!data/sample_corpus/**

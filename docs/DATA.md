@@ -20,6 +20,7 @@ It should not rely on scraped, unverifiable answer-key dumps as the primary know
 - `language` - `ps`, `fa`, `ar`, `en`
 - `source_type` - `explanation`, `definition`, `worked_example`, `practice_question`
 - `source_id`
+- `page` - original textbook page number for exact citations
 - `copyright`
 - `license`
 - `retrieval_weight`

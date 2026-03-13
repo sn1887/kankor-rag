@@ -1,10 +1,11 @@
 from __future__ import annotations
 import json
 from typing import List, Literal
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from rag_core.types import ChatTurn
+from ..chat_parsing import MessageCandidate, extract_question_and_history
+from ..auth import require_bearer_api_key
 from ..wiring import get_app_state
 
 router = APIRouter(prefix='/v1/chat', tags=['chat'])
@@ -17,15 +18,22 @@ class ChatRequest(BaseModel):
     messages: List[MessageIn]
 
 @router.post('/stream')
-def stream_chat(request: ChatRequest) -> StreamingResponse:
-    if not request.messages:
-        raise HTTPException(status_code=400, detail='messages must not be empty')
-    user_messages = [message for message in request.messages if message.role == 'user']
-    if not user_messages:
-        raise HTTPException(status_code=400, detail='at least one user message is required')
-    question = user_messages[-1].content
-    history = [ChatTurn(role=message.role, content=message.content) for message in request.messages[:-1]]
-    pipeline = get_app_state().pipeline
+def stream_chat(
+    request: ChatRequest,
+    authorization: str | None = Header(default=None, alias='Authorization'),
+) -> StreamingResponse:
+    parsed = extract_question_and_history(
+        [MessageCandidate(role=message.role, content=message.content) for message in request.messages]
+    )
+    question = parsed.question
+    history = parsed.history
+    state = get_app_state()
+    require_bearer_api_key(
+        authorization=authorization,
+        expected_token=state.settings.resolved_chat_api_key,
+        endpoint_label="chat stream endpoint",
+    )
+    pipeline = state.pipeline
 
     def event_stream():
         try:

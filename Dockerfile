@@ -8,7 +8,8 @@ WORKDIR /app
 COPY packages /app/packages
 COPY apps/api /app/apps/api
 COPY scripts /app/scripts
-COPY data /app/data
+RUN mkdir -p /app/data
+COPY data/sample_corpus /app/data/sample_corpus
 COPY docs /app/docs
 COPY docker /app/docker
 COPY README.md /app/README.md
@@ -27,5 +28,5 @@ RUN npm run build
 
 WORKDIR /app
 RUN chmod +x /app/docker/start.sh
-EXPOSE 7860
+EXPOSE 7860 8000
 CMD ["bash", "/app/docker/start.sh"]

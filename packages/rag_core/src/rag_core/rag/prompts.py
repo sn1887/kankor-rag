@@ -15,14 +15,19 @@ def detect_answer_language(question: str, default_language: str = 'auto') -> str
 def build_system_prompt(*, question: str, hits: Sequence[Hit], corpus_version: str, default_language: str) -> str:
     language_rule = detect_answer_language(question, default_language)
     return (
-        'You are a careful Kankor exam study assistant. '
-        'Only answer from the retrieved evidence when possible. '
-        'If retrieval is weak, say that evidence is limited and give a cautious answer. '
-        'Cite supporting passages inline using [S1], [S2], etc. '
-        f'The current corpus version is {corpus_version}. '
-        f'Respond in {language_rule}. '
-        'Prefer concise, instructive explanations and step-by-step reasoning for worked examples. '
-        'Do not invent answer keys. Do not claim certainty when the sources are incomplete.'
+        'You are a careful Kankor exam preparation assistant. '
+        'Your main tasks are: clear concept explanations, worked examples, and chapter-based practice questions. '
+        'Use only retrieved evidence for factual claims whenever possible. '
+        'Every factual claim must include inline citations like [S1], [S2], and include page numbers when available, for example [S1 p.42]. '
+        'Do not cite a source that is not present in the retrieved context. '
+        'If evidence is weak or conflicting, explicitly state the limitation before answering. '
+        'When users request practice questions, generate level-appropriate questions, provide answer keys, and cite the supporting source for each answer. '
+        'Do not invent unsupported facts or answer keys. '
+        'Format all responses as clean Markdown using short paragraphs, ordered steps for solutions, and fenced code blocks for formulas or symbolic derivations. '
+        'Use Markdown tables only when they improve comparison clarity. '
+        'Do not output raw HTML. '
+        f'The current corpus version is {corpus_version} and there are {len(hits)} retrieved source chunks. '
+        f'Respond in {language_rule}.'
     )
 
 
@@ -31,10 +36,15 @@ def build_context_block(hits: Sequence[Hit]) -> str:
     for idx, hit in enumerate(hits, start=1):
         meta = hit.document.metadata
         lines.append(
-            f"[S{idx}] subject={meta.get('subject', 'unknown')} "
+            f"[S{idx}] source_id={meta.get('source_id', 'unknown')} "
+            f"title={meta.get('title', 'unknown')} "
+            f"page={meta.get('page', 'unknown')} "
+            f"source_type={meta.get('source_type', 'unknown')} "
+            f"subject={meta.get('subject', 'unknown')} "
             f"category={meta.get('subject_category', 'unknown')} "
             f"grade={meta.get('grade_band', 'mixed')} "
-            f"language={meta.get('language', 'unknown')}"
+            f"language={meta.get('language', 'unknown')} "
+            f"chunk_index={meta.get('chunk_index', '0')}"
         )
         lines.append(hit.document.text.strip())
         lines.append('')
@@ -46,7 +56,8 @@ def build_chat_messages(*, question: str, history: Sequence[ChatTurn], context_b
     user_prompt = (
         f'Retrieved context:\n{context_block}\n\n'
         f'User question: {question}\n\n'
-        'Answer using the evidence above and cite relevant sources like [S1].'
+        'Answer using only the evidence above for factual claims. '
+        'Cite claims inline as [S#] or [S# p.N], keep markdown readable, and structure answers for study use.'
     )
     messages.append(ChatTurn(role='user', content=user_prompt))
     return messages
