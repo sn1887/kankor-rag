@@ -17,6 +17,10 @@ class FaissVectorStore(VectorStore):
         self.documents = documents
 
     @property
+    def dimension(self) -> int:
+        return int(getattr(self.index, "d", 0))
+
+    @property
     def size(self) -> int:
         return len(self.documents)
 

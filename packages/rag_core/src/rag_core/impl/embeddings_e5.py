@@ -38,15 +38,23 @@ class HashingEmbedder(Embedder):
 
 
 class MultilingualE5Embedder(Embedder):
-    def __init__(self, model_name: str, allow_hash_fallback: bool = False) -> None:
+    def __init__(
+        self,
+        model_name: str,
+        allow_hash_fallback: bool = False,
+        fallback_dimensions: int | None = None,
+    ) -> None:
         self.model_name = model_name
         self.allow_hash_fallback = allow_hash_fallback
+        self.fallback_dimensions = int(fallback_dimensions) if fallback_dimensions is not None else 384
+        if self.fallback_dimensions <= 0:
+            raise ValueError("fallback_dimensions must be > 0")
         self._model = None
         self._model_load_attempted = False
         self._fallback_active = False
         self._fallback_reason: str | None = None
         self._fallback_notified = False
-        self._fallback = HashingEmbedder()
+        self._fallback = HashingEmbedder(dimensions=self.fallback_dimensions)
 
     @property
     def fallback_active(self) -> bool:

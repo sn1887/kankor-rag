@@ -7,8 +7,8 @@ from uuid import uuid4
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
-from rag_core.types import ChatTurn
 
+from ..chat_parsing import MessageCandidate, extract_question_and_history
 from ..auth import require_bearer_api_key
 from ..wiring import get_app_state
 
@@ -34,6 +34,7 @@ class ChatCompletionsRequest(BaseModel):
     stream: bool = False
     temperature: float | None = None
     max_tokens: int | None = Field(default=None, ge=1)
+    max_completion_tokens: int | None = Field(default=None, ge=1)
 
 
 def _resolve_message_content(content: str | list[ContentPart] | None) -> str:
@@ -43,31 +44,6 @@ def _resolve_message_content(content: str | list[ContentPart] | None) -> str:
         return content
     chunks = [part.text for part in content if part.type == 'text' and part.text]
     return '\n'.join(chunks).strip()
-
-
-def _extract_question_and_history(messages: list[OpenAIMessageIn]) -> tuple[str, list[ChatTurn]]:
-    if not messages:
-        raise HTTPException(status_code=400, detail='messages must not be empty')
-
-    question_index: int | None = None
-    for idx in range(len(messages) - 1, -1, -1):
-        if messages[idx].role == 'user':
-            question_index = idx
-            break
-    if question_index is None:
-        raise HTTPException(status_code=400, detail='at least one user message is required')
-
-    question = _resolve_message_content(messages[question_index].content).strip()
-    if not question:
-        raise HTTPException(status_code=400, detail='latest user message must include text content')
-
-    history: list[ChatTurn] = []
-    for item in messages[:question_index]:
-        role = item.role if item.role in {'user', 'assistant', 'system'} else 'user'
-        content = _resolve_message_content(item.content).strip()
-        if content:
-            history.append(ChatTurn(role=role, content=content))
-    return question, history
 
 
 def _check_openai_compat_key(authorization: str | None) -> None:
@@ -81,6 +57,26 @@ def _check_openai_compat_key(authorization: str | None) -> None:
 
 def _active_model_id() -> str:
     return get_app_state().settings.active_llm_model_id
+
+
+def _resolve_response_model(requested_model: str | None) -> str:
+    active_model = _active_model_id()
+    candidate = (requested_model or '').strip()
+    if candidate and candidate != active_model:
+        raise HTTPException(
+            status_code=400,
+            detail=f'model "{candidate}" is not available. Use "{active_model}".',
+        )
+    return active_model
+
+
+def _resolve_requested_max_tokens(request: ChatCompletionsRequest) -> int | None:
+    if request.max_tokens is not None and request.max_completion_tokens is not None and request.max_tokens != request.max_completion_tokens:
+        raise HTTPException(
+            status_code=400,
+            detail='max_tokens and max_completion_tokens must match when both are provided.',
+        )
+    return request.max_completion_tokens if request.max_completion_tokens is not None else request.max_tokens
 
 
 @router.get('/models')
@@ -107,16 +103,24 @@ def chat_completions(
     authorization: str | None = Header(default=None, alias='Authorization'),
 ):
     _check_openai_compat_key(authorization)
-    question, history = _extract_question_and_history(request.messages)
+    parsed = extract_question_and_history(
+        [
+            MessageCandidate(role=message.role, content=_resolve_message_content(message.content))
+            for message in request.messages
+        ]
+    )
+    question = parsed.question
+    history = parsed.history
     state = get_app_state()
     pipeline = state.pipeline
 
     created = int(time.time())
     completion_id = f'chatcmpl-{uuid4().hex}'
-    model_name = request.model or _active_model_id()
-    max_new_tokens = request.max_tokens if request.max_tokens is not None else pipeline.max_new_tokens
+    model_name = _resolve_response_model(request.model)
+    requested_max_tokens = _resolve_requested_max_tokens(request)
+    max_new_tokens = requested_max_tokens if requested_max_tokens is not None else pipeline.max_new_tokens
     temperature = request.temperature if request.temperature is not None else pipeline.temperature
-    if request.max_tokens is not None and request.max_tokens > pipeline.max_new_tokens_limit:
+    if requested_max_tokens is not None and requested_max_tokens > pipeline.max_new_tokens_limit:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -150,7 +154,6 @@ def chat_completions(
                     'choices': [{'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': None}],
                 }
                 yield f"data: {json.dumps(role_chunk, ensure_ascii=False)}\n\n".encode('utf-8')
-                sources: list[dict] = []
 
                 for event in pipeline.stream_answer(
                     question=question,
@@ -158,9 +161,6 @@ def chat_completions(
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
                 ):
-                    if event['type'] == 'sources':
-                        sources = event['data']
-                        continue
                     if event['type'] != 'delta':
                         continue
                     delta_text = str(event['data'].get('text', ''))
@@ -182,8 +182,6 @@ def chat_completions(
                     'model': model_name,
                     'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}],
                 }
-                if sources:
-                    final_chunk['sources'] = sources
                 yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n".encode('utf-8')
             except Exception as exc:
                 error_payload = {'error': {'message': str(exc), 'type': 'server_error'}}
@@ -197,7 +195,6 @@ def chat_completions(
             headers={'Cache-Control': 'no-cache, no-transform', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no'},
         )
 
-    sources: list[dict] = []
     chunks: list[str] = []
     for event in pipeline.stream_answer(
         question=question,
@@ -205,9 +202,7 @@ def chat_completions(
         max_new_tokens=max_new_tokens,
         temperature=temperature,
     ):
-        if event['type'] == 'sources':
-            sources = event['data']
-        elif event['type'] == 'delta':
+        if event['type'] == 'delta':
             chunks.append(str(event['data'].get('text', '')))
     answer = ''.join(chunks)
     response = {
@@ -222,6 +217,5 @@ def chat_completions(
                 'finish_reason': 'stop',
             }
         ],
-        'sources': sources,
     }
     return JSONResponse(response)

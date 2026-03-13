@@ -83,14 +83,13 @@ class TransformersLLMProvider(LLMProvider):
             yield from self._demo_stream(messages)
             return
 
-        self._ensure_loaded()
-        assert self._tokenizer is not None and self._model is not None
-
         from transformers import TextIteratorStreamer
 
         # Local transformers generation is not thread-safe on a shared model instance;
         # serialize requests to avoid interleaved streamer output and device contention.
         with self._generation_lock:
+            self._ensure_loaded()
+            assert self._tokenizer is not None and self._model is not None
             streamer = TextIteratorStreamer(self._tokenizer, skip_prompt=True, skip_special_tokens=True)
             model_inputs = self._build_prompt(messages, system_prompt)
             model_inputs = {k: v.to(self._model.device) for k, v in model_inputs.items()}

@@ -1,10 +1,10 @@
 from __future__ import annotations
 import json
 from typing import List, Literal
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from rag_core.types import ChatTurn
+from ..chat_parsing import MessageCandidate, extract_question_and_history
 from ..auth import require_bearer_api_key
 from ..wiring import get_app_state
 
@@ -22,25 +22,11 @@ def stream_chat(
     request: ChatRequest,
     authorization: str | None = Header(default=None, alias='Authorization'),
 ) -> StreamingResponse:
-    if not request.messages:
-        raise HTTPException(status_code=400, detail='messages must not be empty')
-
-    question_index: int | None = None
-    for idx in range(len(request.messages) - 1, -1, -1):
-        if request.messages[idx].role == 'user':
-            question_index = idx
-            break
-    if question_index is None:
-        raise HTTPException(status_code=400, detail='at least one user message is required')
-    question = request.messages[question_index].content.strip()
-    if not question:
-        raise HTTPException(status_code=400, detail='latest user message must include text content')
-
-    history = [
-        ChatTurn(role=message.role, content=message.content.strip())
-        for message in request.messages[:question_index]
-        if message.content.strip()
-    ]
+    parsed = extract_question_and_history(
+        [MessageCandidate(role=message.role, content=message.content) for message in request.messages]
+    )
+    question = parsed.question
+    history = parsed.history
     state = get_app_state()
     require_bearer_api_key(
         authorization=authorization,

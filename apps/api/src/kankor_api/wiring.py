@@ -18,6 +18,11 @@ from rag_core.impl.llm_openai import OpenAILLMProvider
 from rag_core.impl.llm_transformers import TransformersLLMProvider
 from rag_core.impl.vector_faiss import FaissVectorStore
 from rag_core.rag.pipeline import RAGPipeline
+from .compatibility import (
+    load_index_manifest,
+    resolve_expected_embedding_dimension,
+    validate_index_runtime_compatibility,
+)
 from .settings import Settings
 
 @dataclass
@@ -41,10 +46,11 @@ def _build_hash_embedder(_: Settings) -> Embedder:
     return HashingEmbedder()
 
 
-def _build_e5_embedder(settings: Settings) -> Embedder:
+def _build_e5_embedder(settings: Settings, fallback_dimensions: int | None = None) -> Embedder:
     return MultilingualE5Embedder(
         model_name=settings.rag_embedding_model_id,
         allow_hash_fallback=settings.rag_allow_hash_embedder_fallback,
+        fallback_dimensions=fallback_dimensions,
     )
 
 
@@ -198,7 +204,10 @@ def _resolve_factory(name: str, *, registry: dict[str, Callable[[Settings], T]],
     return cast(Callable[[Settings], T], custom_factory)
 
 
-def _build_embedder(settings: Settings) -> Embedder:
+def _build_embedder(settings: Settings, *, expected_dimension: int | None = None) -> Embedder:
+    backend = settings.rag_embedding_backend.strip().lower()
+    if backend == "e5":
+        return _build_e5_embedder(settings, fallback_dimensions=expected_dimension)
     factory = _resolve_factory(
         settings.rag_embedding_backend,
         registry=EMBEDDER_FACTORIES,
@@ -228,9 +237,21 @@ def _build_vector_store(settings: Settings) -> VectorStore:
 @lru_cache(maxsize=1)
 def get_app_state() -> AppState:
     settings = Settings()
-    embedder = _build_embedder(settings)
     vector_store = _build_vector_store(settings)
+    manifest = load_index_manifest(settings.rag_index_path)
+    expected_embedding_dimension = resolve_expected_embedding_dimension(
+        settings=settings,
+        vector_store=vector_store,
+        manifest=manifest,
+    )
+    embedder = _build_embedder(settings, expected_dimension=expected_embedding_dimension)
     llm = _build_llm(settings)
+    validate_index_runtime_compatibility(
+        settings=settings,
+        vector_store=vector_store,
+        embedder=embedder,
+        manifest=manifest,
+    )
     pipeline = RAGPipeline(
         llm=llm,
         embedder=embedder,
