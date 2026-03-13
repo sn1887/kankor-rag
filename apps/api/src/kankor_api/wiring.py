@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 from functools import lru_cache
 import importlib
@@ -18,17 +19,41 @@ from rag_core.impl.llm_openai import OpenAILLMProvider
 from rag_core.impl.llm_transformers import TransformersLLMProvider
 from rag_core.impl.vector_faiss import FaissVectorStore
 from rag_core.rag.pipeline import RAGPipeline
+
 from .compatibility import (
     load_index_manifest,
     resolve_expected_embedding_dimension,
     validate_index_runtime_compatibility,
 )
 from .settings import Settings
+from .whatsapp.contracts import (
+    ConversationStore,
+    JobQueue,
+    MediaProvider,
+    OCRProvider,
+    OutboundMessenger,
+    ProcessedMessageStore,
+)
+from .whatsapp.media import MetaWhatsAppMediaProvider, NoopMediaProvider
+from .whatsapp.messaging import LoggingMessenger, MetaWhatsAppMessenger
+from .whatsapp.ocr import NoopOCRProvider, TesseractOCRProvider
+from .whatsapp.processor import WhatsAppMessageProcessor
+from .whatsapp.redis_backends import (
+    RedisConversationStore,
+    RedisJobQueue,
+    RedisProcessedMessageStore,
+)
+from .whatsapp.queue import InMemoryJobQueue
+from .whatsapp.runtime import WhatsAppRuntime, WhatsAppWorker
+from .whatsapp.service import WhatsAppWebhookService
+from .whatsapp.stores import InMemoryConversationStore, InMemoryProcessedMessageStore
+
 
 @dataclass
 class AppState:
     settings: Settings
     pipeline: RAGPipeline
+    whatsapp: WhatsAppRuntime | None = None
 
 
 T = TypeVar("T")
@@ -40,6 +65,13 @@ def _require_api_key(api_key: str | None, *, backend: str, env_hints: tuple[str,
         return normalized
     env_display = " or ".join(env_hints)
     raise ValueError(f'{backend} backend requires an API key. Set {env_display}.')
+
+
+def _require_whatsapp_setting(value: str | None, *, env_name: str) -> str:
+    normalized = (value or '').strip()
+    if normalized:
+        return normalized
+    raise ValueError(f'WhatsApp support requires {env_name} to be configured.')
 
 
 def _build_hash_embedder(_: Settings) -> Embedder:
@@ -155,6 +187,93 @@ def _build_faiss_vector_store(settings: Settings) -> VectorStore:
     return FaissVectorStore.load(index_path=settings.rag_index_path, metadata_path=metadata_path)
 
 
+def _build_whatsapp_queue_memory(_: Settings) -> JobQueue:
+    return InMemoryJobQueue()
+
+
+def _require_whatsapp_redis_url(settings: Settings) -> str:
+    return _require_whatsapp_setting(
+        settings.resolved_whatsapp_redis_url,
+        env_name='RAG_WHATSAPP_REDIS_URL or REDIS_URL',
+    )
+
+
+def _build_whatsapp_queue_redis(settings: Settings) -> JobQueue:
+    redis_url = _require_whatsapp_redis_url(settings)
+    queue_key = f"{settings.rag_whatsapp_redis_key_prefix}:queue"
+    return RedisJobQueue(redis_url=redis_url, queue_key=queue_key)
+
+
+def _build_whatsapp_processed_store_memory(_: Settings) -> ProcessedMessageStore:
+    return InMemoryProcessedMessageStore()
+
+
+def _build_whatsapp_processed_store_redis(settings: Settings) -> ProcessedMessageStore:
+    redis_url = _require_whatsapp_redis_url(settings)
+    return RedisProcessedMessageStore(
+        redis_url=redis_url,
+        key_prefix=settings.rag_whatsapp_redis_key_prefix,
+        ttl_seconds=settings.rag_whatsapp_processed_ttl_seconds,
+    )
+
+
+def _build_whatsapp_conversation_store_memory(settings: Settings) -> ConversationStore:
+    return InMemoryConversationStore(max_turns=settings.rag_whatsapp_history_turns)
+
+
+def _build_whatsapp_conversation_store_redis(settings: Settings) -> ConversationStore:
+    redis_url = _require_whatsapp_redis_url(settings)
+    return RedisConversationStore(
+        redis_url=redis_url,
+        key_prefix=settings.rag_whatsapp_redis_key_prefix,
+        max_turns=settings.rag_whatsapp_history_turns,
+        ttl_seconds=settings.rag_whatsapp_conversation_ttl_seconds,
+    )
+
+
+def _build_whatsapp_messenger_meta(settings: Settings) -> OutboundMessenger:
+    access_token = _require_whatsapp_setting(
+        settings.resolved_whatsapp_access_token,
+        env_name='RAG_WHATSAPP_ACCESS_TOKEN',
+    )
+    phone_number_id = _require_whatsapp_setting(
+        settings.resolved_whatsapp_phone_number_id,
+        env_name='RAG_WHATSAPP_PHONE_NUMBER_ID',
+    )
+    return MetaWhatsAppMessenger(
+        access_token=access_token,
+        phone_number_id=phone_number_id,
+        api_version=settings.rag_whatsapp_graph_api_version,
+    )
+
+
+def _build_whatsapp_messenger_log(_: Settings) -> OutboundMessenger:
+    return LoggingMessenger()
+
+
+def _build_whatsapp_media_meta(settings: Settings) -> MediaProvider:
+    access_token = _require_whatsapp_setting(
+        settings.resolved_whatsapp_access_token,
+        env_name='RAG_WHATSAPP_ACCESS_TOKEN',
+    )
+    return MetaWhatsAppMediaProvider(
+        access_token=access_token,
+        api_version=settings.rag_whatsapp_graph_api_version,
+    )
+
+
+def _build_whatsapp_media_noop(_: Settings) -> MediaProvider:
+    return NoopMediaProvider()
+
+
+def _build_whatsapp_ocr_noop(_: Settings) -> OCRProvider:
+    return NoopOCRProvider()
+
+
+def _build_whatsapp_ocr_tesseract(_: Settings) -> OCRProvider:
+    return TesseractOCRProvider()
+
+
 EMBEDDER_FACTORIES: dict[str, Callable[[Settings], Embedder]] = {
     "hash": _build_hash_embedder,
     "e5": _build_e5_embedder,
@@ -172,6 +291,36 @@ LLM_FACTORIES: dict[str, Callable[[Settings], LLMProvider]] = {
 
 VECTOR_STORE_FACTORIES: dict[str, Callable[[Settings], VectorStore]] = {
     "faiss": _build_faiss_vector_store,
+}
+
+WHATSAPP_QUEUE_FACTORIES: dict[str, Callable[[Settings], JobQueue]] = {
+    "memory": _build_whatsapp_queue_memory,
+    "redis": _build_whatsapp_queue_redis,
+}
+
+WHATSAPP_PROCESSED_STORE_FACTORIES: dict[str, Callable[[Settings], ProcessedMessageStore]] = {
+    "memory": _build_whatsapp_processed_store_memory,
+    "redis": _build_whatsapp_processed_store_redis,
+}
+
+WHATSAPP_CONVERSATION_STORE_FACTORIES: dict[str, Callable[[Settings], ConversationStore]] = {
+    "memory": _build_whatsapp_conversation_store_memory,
+    "redis": _build_whatsapp_conversation_store_redis,
+}
+
+WHATSAPP_OUTBOUND_FACTORIES: dict[str, Callable[[Settings], OutboundMessenger]] = {
+    "meta": _build_whatsapp_messenger_meta,
+    "log": _build_whatsapp_messenger_log,
+}
+
+WHATSAPP_MEDIA_FACTORIES: dict[str, Callable[[Settings], MediaProvider]] = {
+    "meta": _build_whatsapp_media_meta,
+    "noop": _build_whatsapp_media_noop,
+}
+
+WHATSAPP_OCR_FACTORIES: dict[str, Callable[[Settings], OCRProvider]] = {
+    "noop": _build_whatsapp_ocr_noop,
+    "tesseract": _build_whatsapp_ocr_tesseract,
 }
 
 
@@ -234,6 +383,85 @@ def _build_vector_store(settings: Settings) -> VectorStore:
     return factory(settings)
 
 
+def _build_whatsapp_runtime(settings: Settings, *, pipeline: RAGPipeline) -> WhatsAppRuntime | None:
+    if not settings.rag_whatsapp_enabled:
+        return None
+
+    _require_whatsapp_setting(
+        settings.resolved_whatsapp_verify_token,
+        env_name='RAG_WHATSAPP_VERIFY_TOKEN',
+    )
+
+    queue_factory = _resolve_factory(
+        settings.rag_whatsapp_queue_backend,
+        registry=WHATSAPP_QUEUE_FACTORIES,
+        kind='whatsapp queue',
+    )
+    processed_store_factory = _resolve_factory(
+        settings.rag_whatsapp_processed_store_backend,
+        registry=WHATSAPP_PROCESSED_STORE_FACTORIES,
+        kind='whatsapp processed store',
+    )
+    conversation_store_factory = _resolve_factory(
+        settings.rag_whatsapp_conversation_store_backend,
+        registry=WHATSAPP_CONVERSATION_STORE_FACTORIES,
+        kind='whatsapp conversation store',
+    )
+    outbound_factory = _resolve_factory(
+        settings.rag_whatsapp_outbound_backend,
+        registry=WHATSAPP_OUTBOUND_FACTORIES,
+        kind='whatsapp outbound',
+    )
+    media_factory = _resolve_factory(
+        settings.rag_whatsapp_media_backend,
+        registry=WHATSAPP_MEDIA_FACTORIES,
+        kind='whatsapp media',
+    )
+    ocr_factory = _resolve_factory(
+        settings.rag_whatsapp_ocr_backend,
+        registry=WHATSAPP_OCR_FACTORIES,
+        kind='whatsapp ocr',
+    )
+
+    queue = queue_factory(settings)
+    processed_store = processed_store_factory(settings)
+    conversation_store = conversation_store_factory(settings)
+    messenger = outbound_factory(settings)
+    media_provider = media_factory(settings)
+    ocr_provider = ocr_factory(settings)
+
+    processor = WhatsAppMessageProcessor(
+        pipeline=pipeline,
+        messenger=messenger,
+        conversation_store=conversation_store,
+        media_provider=media_provider,
+        ocr_provider=ocr_provider,
+        max_reply_chars=settings.rag_whatsapp_max_reply_chars,
+    )
+    worker = WhatsAppWorker(
+        queue=queue,
+        processor=processor,
+        poll_timeout_seconds=settings.rag_whatsapp_worker_poll_seconds,
+    )
+    service = WhatsAppWebhookService(
+        queue=queue,
+        processed_store=processed_store,
+        signature_secret=settings.rag_whatsapp_webhook_secret,
+    )
+
+    closables = [
+        dep
+        for dep in (queue, processed_store, conversation_store, messenger, media_provider)
+        if callable(getattr(dep, 'close', None))
+    ]
+    return WhatsAppRuntime(
+        service=service,
+        worker=worker,
+        concurrency=settings.rag_whatsapp_worker_concurrency,
+        closables=closables,
+    )
+
+
 @lru_cache(maxsize=1)
 def get_app_state() -> AppState:
     settings = Settings()
@@ -267,4 +495,5 @@ def get_app_state() -> AppState:
         default_language=settings.rag_default_language,
         source_pdf_url_template=settings.rag_source_pdf_url_template,
     )
-    return AppState(settings=settings, pipeline=pipeline)
+    whatsapp_runtime = _build_whatsapp_runtime(settings, pipeline=pipeline)
+    return AppState(settings=settings, pipeline=pipeline, whatsapp=whatsapp_runtime)

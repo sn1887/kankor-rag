@@ -53,3 +53,20 @@ def test_embedding_dimensions_accept_empty_env_as_none(monkeypatch) -> None:
     assert settings.rag_gemini_embedding_dimensions is None
     assert settings.rag_deepseek_embedding_dimensions is None
     assert settings.rag_openai_embedding_dimensions is None
+
+
+def test_resolved_whatsapp_tokens_strip_whitespace(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_WHATSAPP_VERIFY_TOKEN", "  verify-token ")
+    monkeypatch.setenv("RAG_WHATSAPP_ACCESS_TOKEN", "  access-token ")
+    monkeypatch.setenv("RAG_WHATSAPP_PHONE_NUMBER_ID", " 12345 ")
+    settings = Settings()
+    assert settings.resolved_whatsapp_verify_token == "verify-token"
+    assert settings.resolved_whatsapp_access_token == "access-token"
+    assert settings.resolved_whatsapp_phone_number_id == "12345"
+
+
+def test_resolved_whatsapp_redis_url_falls_back_to_redis_url_env(monkeypatch) -> None:
+    monkeypatch.delenv("RAG_WHATSAPP_REDIS_URL", raising=False)
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6379/1")
+    settings = Settings()
+    assert settings.resolved_whatsapp_redis_url == "redis://127.0.0.1:6379/1"

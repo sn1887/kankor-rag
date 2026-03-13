@@ -58,6 +58,26 @@ class Settings(BaseSettings):
         alias='RAG_SOURCE_PDF_URL_TEMPLATE',
     )
     rag_demo_mode: bool = Field(default=False, alias='RAG_DEMO_MODE')
+    rag_whatsapp_enabled: bool = Field(default=False, alias='RAG_WHATSAPP_ENABLED')
+    rag_whatsapp_verify_token: str | None = Field(default=None, alias='RAG_WHATSAPP_VERIFY_TOKEN')
+    rag_whatsapp_access_token: str | None = Field(default=None, alias='RAG_WHATSAPP_ACCESS_TOKEN')
+    rag_whatsapp_phone_number_id: str | None = Field(default=None, alias='RAG_WHATSAPP_PHONE_NUMBER_ID')
+    rag_whatsapp_graph_api_version: str = Field(default='v22.0', alias='RAG_WHATSAPP_GRAPH_API_VERSION')
+    rag_whatsapp_webhook_secret: str | None = Field(default=None, alias='RAG_WHATSAPP_WEBHOOK_SECRET')
+    rag_whatsapp_worker_concurrency: int = Field(default=2, alias='RAG_WHATSAPP_WORKER_CONCURRENCY')
+    rag_whatsapp_queue_backend: str = Field(default='memory', alias='RAG_WHATSAPP_QUEUE_BACKEND')
+    rag_whatsapp_processed_store_backend: str = Field(default='memory', alias='RAG_WHATSAPP_PROCESSED_STORE_BACKEND')
+    rag_whatsapp_conversation_store_backend: str = Field(default='memory', alias='RAG_WHATSAPP_CONVERSATION_STORE_BACKEND')
+    rag_whatsapp_outbound_backend: str = Field(default='meta', alias='RAG_WHATSAPP_OUTBOUND_BACKEND')
+    rag_whatsapp_media_backend: str = Field(default='meta', alias='RAG_WHATSAPP_MEDIA_BACKEND')
+    rag_whatsapp_ocr_backend: str = Field(default='noop', alias='RAG_WHATSAPP_OCR_BACKEND')
+    rag_whatsapp_history_turns: int = Field(default=6, alias='RAG_WHATSAPP_HISTORY_TURNS')
+    rag_whatsapp_processed_ttl_seconds: int = Field(default=172800, alias='RAG_WHATSAPP_PROCESSED_TTL_SECONDS')
+    rag_whatsapp_conversation_ttl_seconds: int = Field(default=604800, alias='RAG_WHATSAPP_CONVERSATION_TTL_SECONDS')
+    rag_whatsapp_redis_url: str | None = Field(default=None, alias='RAG_WHATSAPP_REDIS_URL')
+    rag_whatsapp_redis_key_prefix: str = Field(default='kankor:whatsapp', alias='RAG_WHATSAPP_REDIS_KEY_PREFIX')
+    rag_whatsapp_max_reply_chars: int = Field(default=1400, alias='RAG_WHATSAPP_MAX_REPLY_CHARS')
+    rag_whatsapp_worker_poll_seconds: float = Field(default=1.0, alias='RAG_WHATSAPP_WORKER_POLL_SECONDS')
 
     @field_validator(
         'rag_openai_embedding_dimensions',
@@ -122,3 +142,19 @@ class Settings(BaseSettings):
         if backend == 'hash':
             return 'hash'
         return self.rag_embedding_model_id
+
+    @property
+    def resolved_whatsapp_verify_token(self) -> str | None:
+        return self._first_non_empty(self.rag_whatsapp_verify_token)
+
+    @property
+    def resolved_whatsapp_access_token(self) -> str | None:
+        return self._first_non_empty(self.rag_whatsapp_access_token)
+
+    @property
+    def resolved_whatsapp_phone_number_id(self) -> str | None:
+        return self._first_non_empty(self.rag_whatsapp_phone_number_id)
+
+    @property
+    def resolved_whatsapp_redis_url(self) -> str | None:
+        return self._first_non_empty(self.rag_whatsapp_redis_url, os.getenv('REDIS_URL'))

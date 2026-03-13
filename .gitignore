@@ -21,6 +21,7 @@ yarn-error.log
 .env
 .env.local
 .env.*
+!.env.whatsapp.example
 docker/.env
 coverage/
 dist/
