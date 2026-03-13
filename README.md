@@ -226,9 +226,90 @@ Key environment variables:
 - `RAG_CONTRASTIVE_PENALTY_ALPHA`: contrastive decoding parameter
 - `RAG_CONTRASTIVE_TOP_K`: contrastive decoding parameter
 - `BACKEND_API_KEY` (Next.js only): forwards `Authorization: Bearer ...` to backend `/v1/chat/stream`
+- `RAG_WHATSAPP_ENABLED`: enable WhatsApp webhook + worker runtime
+- `RAG_WHATSAPP_VERIFY_TOKEN`: Meta webhook verification token (`GET /v1/whatsapp/webhook`)
+- `RAG_WHATSAPP_WEBHOOK_SECRET`: optional HMAC secret used to validate `X-Hub-Signature-256`
+- `RAG_WHATSAPP_ACCESS_TOKEN`: Meta Graph API token for outbound send + media fetch
+- `RAG_WHATSAPP_PHONE_NUMBER_ID`: WhatsApp business phone number id for outbound messages
+- `RAG_WHATSAPP_GRAPH_API_VERSION`: Graph API version (default `v22.0`)
+- `RAG_WHATSAPP_WORKER_CONCURRENCY`: number of async workers consuming inbound jobs
+- `RAG_WHATSAPP_WORKER_POLL_SECONDS`: queue polling interval for idle workers
+- `RAG_WHATSAPP_HISTORY_TURNS`: per-user chat memory window used for follow-up context
+- `RAG_WHATSAPP_PROCESSED_TTL_SECONDS`: dedupe key TTL (seconds) when using Redis processed store
+- `RAG_WHATSAPP_CONVERSATION_TTL_SECONDS`: conversation history TTL (seconds) when using Redis conversation store
+- `RAG_WHATSAPP_MAX_REPLY_CHARS`: hard split size for outbound WhatsApp text chunks
+- `RAG_WHATSAPP_QUEUE_BACKEND`: queue backend (`memory`, `redis`, or `module.path:factory`)
+- `RAG_WHATSAPP_PROCESSED_STORE_BACKEND`: processed-message store backend (`memory`, `redis`, or `module.path:factory`)
+- `RAG_WHATSAPP_CONVERSATION_STORE_BACKEND`: conversation store backend (`memory`, `redis`, or `module.path:factory`)
+- `RAG_WHATSAPP_OUTBOUND_BACKEND`: outbound backend (`meta`, `log`, or `module.path:factory`)
+- `RAG_WHATSAPP_MEDIA_BACKEND`: media backend (`meta`, `noop`, or `module.path:factory`)
+- `RAG_WHATSAPP_OCR_BACKEND`: OCR backend (`noop`, `tesseract`, or `module.path:factory`)
+- `RAG_WHATSAPP_REDIS_URL`: Redis URL for built-in Redis queue/stores (falls back to `REDIS_URL`)
+- `RAG_WHATSAPP_REDIS_KEY_PREFIX`: key prefix for Redis WhatsApp data (`kankor:whatsapp` by default)
 
 Contrastive decoding requires remote generation code from:
 `transformers-community/contrastive-search`
+
+## WhatsApp Channel
+
+The API now includes a modular WhatsApp channel:
+
+- `GET /v1/whatsapp/webhook`: Meta webhook verification challenge
+- `POST /v1/whatsapp/webhook`: receives inbound WhatsApp events, verifies signature, de-duplicates by message id, and enqueues async jobs
+
+Implementation notes:
+
+- RAG inference reuses the same `RAGPipeline` used by web/OpenAI-compatible routes
+- message processing runs in background worker(s), so webhook responses are fast ACKs
+- text and image questions are supported; image messages run through pluggable media + OCR providers
+- all WhatsApp dependencies are interface-based for plug-and-play replacement
+
+## WhatsApp Smoke Test
+
+One-command local WhatsApp boot profile (API + Redis):
+
+```bash
+./scripts/whatsapp_local_up.sh
+```
+
+This starts:
+- WhatsApp API at `http://127.0.0.1:8100`
+- Redis at `redis://127.0.0.1:6379/0`
+
+Run detached:
+
+```bash
+./scripts/whatsapp_local_up.sh -d
+```
+
+Use a custom env file:
+
+```bash
+./scripts/whatsapp_local_up.sh /path/to/.env.whatsapp
+```
+
+Use the helper script to test both verification and ingestion against a running API:
+
+```bash
+cp .env.whatsapp.example .env
+
+python scripts/whatsapp_webhook_smoke_test.py \
+  --base-url http://127.0.0.1:8100 \
+  --verify-token <RAG_WHATSAPP_VERIFY_TOKEN> \
+  --webhook-secret <RAG_WHATSAPP_WEBHOOK_SECRET>
+```
+
+For local smoke runs without Meta credentials, set:
+`RAG_WHATSAPP_OUTBOUND_BACKEND=log` and `RAG_WHATSAPP_MEDIA_BACKEND=noop`.
+
+For Redis-backed runtime:
+
+```bash
+export RAG_WHATSAPP_QUEUE_BACKEND=redis
+export RAG_WHATSAPP_PROCESSED_STORE_BACKEND=redis
+export RAG_WHATSAPP_CONVERSATION_STORE_BACKEND=redis
+export RAG_WHATSAPP_REDIS_URL=redis://127.0.0.1:6379/0
+```
 
 ## Hugging Face Space Deployment
 
