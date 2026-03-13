@@ -39,7 +39,18 @@ class DummyEmbedder(Embedder):
 
 class DummyVectorStore(VectorStore):
     def __init__(self) -> None:
-        self._document = Document(id="doc-1", text="evidence", metadata={})
+        self._document = Document(
+            id="doc-1",
+            text="evidence",
+            metadata={
+                "title": "G10 Biology",
+                "subject": "biology",
+                "language": "fa",
+                "grade_band": "10",
+                "source_id": "G10-Dr-Biology",
+                "page": 7,
+            },
+        )
 
     @property
     def size(self) -> int:
@@ -88,3 +99,16 @@ def test_stream_answer_uses_guarded_generation_values() -> None:
     assert events[0]["type"] == "sources"
     assert llm.last_max_new_tokens == 256
     assert llm.last_temperature == 0.0
+
+
+def test_stream_answer_appends_references_markdown() -> None:
+    pipeline, _ = _make_pipeline()
+    events = list(pipeline.stream_answer(question="hello", history=[]))
+    answer = "".join(
+        str(event["data"].get("text", ""))
+        for event in events
+        if event["type"] == "delta"
+    )
+    assert "### References" in answer
+    assert "- [S1]" in answer
+    assert "[Open page](" in answer

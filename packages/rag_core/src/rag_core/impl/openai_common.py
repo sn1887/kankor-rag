@@ -9,7 +9,7 @@ def build_openai_client(
     base_url: str | None,
     timeout_seconds: float,
 ):
-    """Create an OpenAI client with optional overrides.
+    """Create an OpenAI/OpenAI-compatible client with optional overrides.
 
     The OpenAI SDK will still resolve environment defaults when values are None.
     """

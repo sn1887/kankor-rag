@@ -80,10 +80,7 @@ def _check_openai_compat_key(authorization: str | None) -> None:
 
 
 def _active_model_id() -> str:
-    settings = get_app_state().settings
-    if settings.rag_llm_backend.lower().strip() == 'openai':
-        return settings.rag_openai_model_id
-    return settings.rag_model_id
+    return get_app_state().settings.active_llm_model_id
 
 
 @router.get('/models')

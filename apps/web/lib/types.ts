@@ -8,6 +8,9 @@ export interface SourceItem {
   subject: string;
   language: string;
   gradeBand: string;
+  sourceId?: string;
+  page?: number | null;
+  pdfUrl?: string | null;
   corpusVersion: string;
 }
 export interface ChatMessage {

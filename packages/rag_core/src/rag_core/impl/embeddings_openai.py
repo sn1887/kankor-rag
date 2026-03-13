@@ -34,6 +34,30 @@ class OpenAIEmbedder(Embedder):
         )
         return self._client
 
+    @staticmethod
+    def _supports_dimension_fallback(exc: Exception) -> bool:
+        message = str(exc).lower()
+        return 'dimensions' in message and any(
+            token in message
+            for token in ('unknown', 'unsupported', 'not permitted', 'invalid', 'unrecognized', 'extra_forbidden')
+        )
+
+    @staticmethod
+    def _to_ordered_vectors(rows: Sequence[object]) -> np.ndarray:
+        indexed: list[tuple[bool, int, list[float]]] = []
+        for position, row in enumerate(rows):
+            index = getattr(row, 'index', None)
+            has_valid_index = isinstance(index, int)
+            sort_index = index if has_valid_index else position
+            embedding = getattr(row, 'embedding', None)
+            if embedding is None:
+                raise ValueError('Embedding response row is missing "embedding" data.')
+            # Rows with explicit numeric indexes should be ordered first by index.
+            # Rows without indexes are appended in original response order.
+            indexed.append((not has_valid_index, sort_index, embedding))
+        indexed.sort(key=lambda pair: (pair[0], pair[1]))
+        return np.asarray([embedding for _, _, embedding in indexed], dtype=np.float32)
+
     def embed_documents(self, texts: Sequence[str]) -> np.ndarray:
         if not texts:
             width = self.dimensions if self.dimensions is not None else 0
@@ -43,11 +67,15 @@ class OpenAIEmbedder(Embedder):
         payload: dict[str, object] = {'model': self.model_name, 'input': list(texts)}
         if self.dimensions is not None:
             payload['dimensions'] = int(self.dimensions)
-
-        response = client.embeddings.create(**payload)
-        rows = sorted(response.data, key=lambda item: item.index)
-        vectors = np.asarray([row.embedding for row in rows], dtype=np.float32)
-        return vectors
+        try:
+            response = client.embeddings.create(**payload)
+        except Exception as exc:
+            # Some OpenAI-compatible embedding endpoints do not implement dimensions.
+            if 'dimensions' not in payload or not self._supports_dimension_fallback(exc):
+                raise
+            payload.pop('dimensions', None)
+            response = client.embeddings.create(**payload)
+        return self._to_ordered_vectors(response.data)
 
     def embed_query(self, text: str) -> np.ndarray:
         vectors = self.embed_documents([text])

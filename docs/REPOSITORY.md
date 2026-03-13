@@ -47,7 +47,7 @@ You can swap the following without rewriting the whole repository:
 4. corpus source
 5. prompt/policy layer
 
-Backends can be selected by built-in key (for example `openai`, `e5`, `faiss`) or by custom callable path (`module.path:factory`).
+Backends can be selected by built-in key (for example `openai`, `gemini`, `deepseek`, `e5`, `faiss`) or by custom callable path (`module.path:factory`).
 
 ## Artifact strategy
 

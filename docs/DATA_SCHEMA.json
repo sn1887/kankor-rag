@@ -63,6 +63,10 @@
         "source_id": {
           "type": "string"
         },
+        "page": {
+          "type": "integer",
+          "minimum": 1
+        },
         "copyright": {
           "type": "string"
         },

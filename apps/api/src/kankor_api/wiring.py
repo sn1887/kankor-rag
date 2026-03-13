@@ -8,8 +8,12 @@ from typing import Callable, TypeVar, cast
 from rag_core.contracts.embeddings import Embedder
 from rag_core.contracts.llm import LLMProvider
 from rag_core.contracts.vector_store import VectorStore
+from rag_core.impl.embeddings_deepseek import DeepSeekEmbedder
 from rag_core.impl.embeddings_e5 import HashingEmbedder, MultilingualE5Embedder
+from rag_core.impl.embeddings_gemini import GeminiEmbedder
 from rag_core.impl.embeddings_openai import OpenAIEmbedder
+from rag_core.impl.llm_deepseek import DeepSeekLLMProvider
+from rag_core.impl.llm_gemini import GeminiLLMProvider
 from rag_core.impl.llm_openai import OpenAILLMProvider
 from rag_core.impl.llm_transformers import TransformersLLMProvider
 from rag_core.impl.vector_faiss import FaissVectorStore
@@ -23,6 +27,14 @@ class AppState:
 
 
 T = TypeVar("T")
+
+
+def _require_api_key(api_key: str | None, *, backend: str, env_hints: tuple[str, ...]) -> str:
+    normalized = (api_key or '').strip()
+    if normalized:
+        return normalized
+    env_display = " or ".join(env_hints)
+    raise ValueError(f'{backend} backend requires an API key. Set {env_display}.')
 
 
 def _build_hash_embedder(_: Settings) -> Embedder:
@@ -46,6 +58,36 @@ def _build_openai_embedder(settings: Settings) -> Embedder:
     )
 
 
+def _build_gemini_embedder(settings: Settings) -> Embedder:
+    api_key = _require_api_key(
+        settings.resolved_gemini_api_key,
+        backend='gemini embedding',
+        env_hints=('RAG_GEMINI_API_KEY', 'GEMINI_API_KEY'),
+    )
+    return GeminiEmbedder(
+        model_name=settings.rag_gemini_embedding_model_id,
+        api_key=api_key,
+        base_url=settings.rag_gemini_base_url,
+        dimensions=settings.rag_gemini_embedding_dimensions,
+        timeout_seconds=settings.rag_gemini_timeout_seconds,
+    )
+
+
+def _build_deepseek_embedder(settings: Settings) -> Embedder:
+    api_key = _require_api_key(
+        settings.resolved_deepseek_api_key,
+        backend='deepseek embedding',
+        env_hints=('RAG_DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY'),
+    )
+    return DeepSeekEmbedder(
+        model_name=settings.rag_deepseek_embedding_model_id,
+        api_key=api_key,
+        base_url=settings.rag_deepseek_base_url,
+        dimensions=settings.rag_deepseek_embedding_dimensions,
+        timeout_seconds=settings.rag_deepseek_timeout_seconds,
+    )
+
+
 def _build_transformers_llm(settings: Settings) -> LLMProvider:
     return TransformersLLMProvider(
         model_name=settings.rag_model_id,
@@ -62,6 +104,34 @@ def _build_openai_llm(settings: Settings) -> LLMProvider:
         api_key=settings.rag_openai_api_key,
         base_url=settings.rag_openai_base_url,
         timeout_seconds=settings.rag_openai_timeout_seconds,
+    )
+
+
+def _build_gemini_llm(settings: Settings) -> LLMProvider:
+    api_key = _require_api_key(
+        settings.resolved_gemini_api_key,
+        backend='gemini llm',
+        env_hints=('RAG_GEMINI_API_KEY', 'GEMINI_API_KEY'),
+    )
+    return GeminiLLMProvider(
+        model_name=settings.rag_gemini_model_id,
+        api_key=api_key,
+        base_url=settings.rag_gemini_base_url,
+        timeout_seconds=settings.rag_gemini_timeout_seconds,
+    )
+
+
+def _build_deepseek_llm(settings: Settings) -> LLMProvider:
+    api_key = _require_api_key(
+        settings.resolved_deepseek_api_key,
+        backend='deepseek llm',
+        env_hints=('RAG_DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY'),
+    )
+    return DeepSeekLLMProvider(
+        model_name=settings.rag_deepseek_model_id,
+        api_key=api_key,
+        base_url=settings.rag_deepseek_base_url,
+        timeout_seconds=settings.rag_deepseek_timeout_seconds,
     )
 
 
@@ -83,11 +153,15 @@ EMBEDDER_FACTORIES: dict[str, Callable[[Settings], Embedder]] = {
     "hash": _build_hash_embedder,
     "e5": _build_e5_embedder,
     "openai": _build_openai_embedder,
+    "gemini": _build_gemini_embedder,
+    "deepseek": _build_deepseek_embedder,
 }
 
 LLM_FACTORIES: dict[str, Callable[[Settings], LLMProvider]] = {
     "transformers": _build_transformers_llm,
     "openai": _build_openai_llm,
+    "gemini": _build_gemini_llm,
+    "deepseek": _build_deepseek_llm,
 }
 
 VECTOR_STORE_FACTORIES: dict[str, Callable[[Settings], VectorStore]] = {
@@ -170,5 +244,6 @@ def get_app_state() -> AppState:
         temperature_min=settings.rag_temperature_min,
         temperature_max=settings.rag_temperature_max,
         default_language=settings.rag_default_language,
+        source_pdf_url_template=settings.rag_source_pdf_url_template,
     )
     return AppState(settings=settings, pipeline=pipeline)

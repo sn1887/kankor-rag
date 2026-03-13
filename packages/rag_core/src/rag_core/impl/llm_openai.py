@@ -38,6 +38,40 @@ class OpenAILLMProvider(LLMProvider):
             payload.append({'role': message.role, 'content': message.content})
         return payload
 
+    @staticmethod
+    def _supports_legacy_max_tokens(exc: Exception) -> bool:
+        message = str(exc).lower()
+        return 'max_completion_tokens' in message and any(
+            token in message
+            for token in ('unknown', 'unsupported', 'not permitted', 'invalid', 'unrecognized', 'extra_forbidden')
+        )
+
+    def _create_stream(
+        self,
+        *,
+        messages: Sequence[ChatTurn],
+        system_prompt: str,
+        max_new_tokens: int,
+        temperature: float,
+    ):
+        client = self._get_client()
+        payload: dict[str, object] = {
+            'model': self.model_name,
+            'messages': self._to_openai_messages(messages, system_prompt),
+            'stream': True,
+            'max_completion_tokens': max_new_tokens,
+            'temperature': max(0.0, float(temperature)),
+        }
+        try:
+            return client.chat.completions.create(**payload)
+        except Exception as exc:
+            # Some OpenAI-compatible endpoints still expect max_tokens.
+            if not self._supports_legacy_max_tokens(exc):
+                raise
+            payload.pop('max_completion_tokens', None)
+            payload['max_tokens'] = max_new_tokens
+            return client.chat.completions.create(**payload)
+
     def stream_chat(
         self,
         *,
@@ -46,13 +80,11 @@ class OpenAILLMProvider(LLMProvider):
         max_new_tokens: int,
         temperature: float,
     ) -> Iterator[str]:
-        client = self._get_client()
-        stream = client.chat.completions.create(
-            model=self.model_name,
-            messages=self._to_openai_messages(messages, system_prompt),
-            stream=True,
-            max_completion_tokens=max_new_tokens,
-            temperature=max(0.0, float(temperature)),
+        stream = self._create_stream(
+            messages=messages,
+            system_prompt=system_prompt,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
         )
         for chunk in stream:
             if not chunk.choices:

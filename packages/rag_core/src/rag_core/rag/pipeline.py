@@ -5,7 +5,11 @@ from collections.abc import Iterator, Sequence
 from rag_core.contracts.embeddings import Embedder
 from rag_core.contracts.llm import LLMProvider
 from rag_core.contracts.vector_store import VectorStore
-from rag_core.rag.citations import hits_to_source_payload
+from rag_core.rag.citations import (
+    DEFAULT_SOURCE_PDF_URL_TEMPLATE,
+    build_references_suffix,
+    hits_to_source_payload,
+)
 from rag_core.rag.prompts import build_chat_messages, build_context_block, build_system_prompt
 from rag_core.types import ChatTurn, Hit
 
@@ -26,6 +30,7 @@ class RAGPipeline:
         temperature_min: float = 0.0,
         temperature_max: float = 2.0,
         default_language: str = 'auto',
+        source_pdf_url_template: str | None = DEFAULT_SOURCE_PDF_URL_TEMPLATE,
     ) -> None:
         self.llm = llm
         self.embedder = embedder
@@ -42,6 +47,7 @@ class RAGPipeline:
         if self.temperature_min > self.temperature_max:
             raise ValueError("temperature_min must be <= temperature_max")
         self.default_language = default_language
+        self.source_pdf_url_template = source_pdf_url_template
 
     def retrieve(self, question: str) -> list[Hit]:
         query_vector = self.embedder.embed_query(question)
@@ -79,7 +85,15 @@ class RAGPipeline:
         temperature: float | None = None,
     ) -> Iterator[dict]:
         hits = self.retrieve(question)
-        yield {'type': 'sources', 'data': hits_to_source_payload(hits, self.corpus_version)}
+        source_payload = hits_to_source_payload(
+            hits,
+            self.corpus_version,
+            source_pdf_url_template=self.source_pdf_url_template,
+        )
+        yield {
+            'type': 'sources',
+            'data': source_payload,
+        }
         if not hits:
             for token in self._fallback_response(question).split(' '):
                 yield {'type': 'delta', 'data': {'text': token + ' '}}
@@ -91,5 +105,13 @@ class RAGPipeline:
         system_prompt = build_system_prompt(question=question, hits=hits, corpus_version=self.corpus_version, default_language=self.default_language)
         context_block = build_context_block(hits)
         messages = build_chat_messages(question=question, history=history, context_block=context_block)
+        generated_chunks: list[str] = []
         for token in self.llm.stream_chat(messages=messages, system_prompt=system_prompt, max_new_tokens=resolved_max_new_tokens, temperature=resolved_temperature):
+            generated_chunks.append(token)
             yield {'type': 'delta', 'data': {'text': token}}
+        references_suffix = build_references_suffix(
+            answer_markdown=''.join(generated_chunks),
+            sources=source_payload,
+        )
+        if references_suffix:
+            yield {'type': 'delta', 'data': {'text': references_suffix}}

@@ -1,6 +1,7 @@
 from __future__ import annotations
+import os
 from typing import List
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -11,14 +12,26 @@ class Settings(BaseSettings):
     rag_llm_backend: str = Field(default='transformers', alias='RAG_LLM_BACKEND')
     rag_model_id: str = Field(default='Qwen/Qwen3.5-2B', alias='RAG_MODEL_ID')
     rag_openai_model_id: str = Field(default='gpt-4o-mini', alias='RAG_OPENAI_MODEL_ID')
+    rag_gemini_model_id: str = Field(default='gemini-2.0-flash', alias='RAG_GEMINI_MODEL_ID')
+    rag_deepseek_model_id: str = Field(default='deepseek-chat', alias='RAG_DEEPSEEK_MODEL_ID')
     rag_embedding_model_id: str = Field(default='intfloat/multilingual-e5-small', alias='RAG_EMBEDDING_MODEL_ID')
     rag_openai_embedding_model_id: str = Field(default='text-embedding-3-small', alias='RAG_OPENAI_EMBEDDING_MODEL_ID')
+    rag_gemini_embedding_model_id: str = Field(default='text-embedding-004', alias='RAG_GEMINI_EMBEDDING_MODEL_ID')
+    rag_deepseek_embedding_model_id: str = Field(default='deepseek-embedding', alias='RAG_DEEPSEEK_EMBEDDING_MODEL_ID')
     rag_embedding_backend: str = Field(default='e5', alias='RAG_EMBEDDING_BACKEND')
     rag_allow_hash_embedder_fallback: bool = Field(default=False, alias='RAG_ALLOW_HASH_EMBEDDER_FALLBACK')
     rag_openai_api_key: str | None = Field(default=None, alias='RAG_OPENAI_API_KEY')
     rag_openai_base_url: str | None = Field(default=None, alias='RAG_OPENAI_BASE_URL')
     rag_openai_timeout_seconds: float = Field(default=120.0, alias='RAG_OPENAI_TIMEOUT_SECONDS')
     rag_openai_embedding_dimensions: int | None = Field(default=None, alias='RAG_OPENAI_EMBEDDING_DIMENSIONS')
+    rag_gemini_api_key: str | None = Field(default=None, alias='RAG_GEMINI_API_KEY')
+    rag_gemini_base_url: str = Field(default='https://generativelanguage.googleapis.com/v1beta/openai', alias='RAG_GEMINI_BASE_URL')
+    rag_gemini_timeout_seconds: float = Field(default=120.0, alias='RAG_GEMINI_TIMEOUT_SECONDS')
+    rag_gemini_embedding_dimensions: int | None = Field(default=None, alias='RAG_GEMINI_EMBEDDING_DIMENSIONS')
+    rag_deepseek_api_key: str | None = Field(default=None, alias='RAG_DEEPSEEK_API_KEY')
+    rag_deepseek_base_url: str = Field(default='https://api.deepseek.com/v1', alias='RAG_DEEPSEEK_BASE_URL')
+    rag_deepseek_timeout_seconds: float = Field(default=120.0, alias='RAG_DEEPSEEK_TIMEOUT_SECONDS')
+    rag_deepseek_embedding_dimensions: int | None = Field(default=None, alias='RAG_DEEPSEEK_EMBEDDING_DIMENSIONS')
     rag_openai_compat_api_key: str | None = Field(default=None, alias='RAG_OPENAI_COMPAT_API_KEY')
     rag_chat_api_key: str | None = Field(default=None, alias='RAG_CHAT_API_KEY')
     rag_index_path: str = Field(default='data/sample_index/index.faiss', alias='RAG_INDEX_PATH')
@@ -36,7 +49,27 @@ class Settings(BaseSettings):
     rag_contrastive_top_k: int = Field(default=4, alias='RAG_CONTRASTIVE_TOP_K')
     rag_default_language: str = Field(default='auto', alias='RAG_DEFAULT_LANGUAGE')
     rag_corpus_version: str = Field(default='kankor-corpus@2026.03-demo', alias='RAG_CORPUS_VERSION')
+    rag_source_pdf_url_template: str = Field(
+        default=(
+            "https://github.com/"
+            "sn1887/afghan-high-school-textbooks/blob/main/"
+            "docs/pdfs/grade_{grade_band}/{source_id}.pdf#page={page}"
+        ),
+        alias='RAG_SOURCE_PDF_URL_TEMPLATE',
+    )
     rag_demo_mode: bool = Field(default=False, alias='RAG_DEMO_MODE')
+
+    @field_validator(
+        'rag_openai_embedding_dimensions',
+        'rag_gemini_embedding_dimensions',
+        'rag_deepseek_embedding_dimensions',
+        mode='before',
+    )
+    @classmethod
+    def _empty_embedding_dimensions_to_none(cls, value):
+        if value == '':
+            return None
+        return value
 
     @property
     def cors_origins(self) -> List[str]:
@@ -49,3 +82,43 @@ class Settings(BaseSettings):
             return chat_key
         compat_key = (self.rag_openai_compat_api_key or '').strip()
         return compat_key or None
+
+    @staticmethod
+    def _first_non_empty(*values: str | None) -> str | None:
+        for value in values:
+            normalized = (value or '').strip()
+            if normalized:
+                return normalized
+        return None
+
+    @property
+    def resolved_gemini_api_key(self) -> str | None:
+        return self._first_non_empty(self.rag_gemini_api_key, os.getenv('GEMINI_API_KEY'))
+
+    @property
+    def resolved_deepseek_api_key(self) -> str | None:
+        return self._first_non_empty(self.rag_deepseek_api_key, os.getenv('DEEPSEEK_API_KEY'))
+
+    @property
+    def active_llm_model_id(self) -> str:
+        backend = self.rag_llm_backend.lower().strip()
+        if backend == 'openai':
+            return self.rag_openai_model_id
+        if backend == 'gemini':
+            return self.rag_gemini_model_id
+        if backend == 'deepseek':
+            return self.rag_deepseek_model_id
+        return self.rag_model_id
+
+    @property
+    def configured_embedding_model_id(self) -> str:
+        backend = self.rag_embedding_backend.lower().strip()
+        if backend == 'openai':
+            return self.rag_openai_embedding_model_id
+        if backend == 'gemini':
+            return self.rag_gemini_embedding_model_id
+        if backend == 'deepseek':
+            return self.rag_deepseek_embedding_model_id
+        if backend == 'hash':
+            return 'hash'
+        return self.rag_embedding_model_id
