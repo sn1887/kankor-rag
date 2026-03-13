@@ -23,16 +23,33 @@ def split_text(text: str, chunk_size: int = 750, chunk_overlap: int = 100) -> li
         start = max(0, end - chunk_overlap)
     return chunks
 
-def chunk_documents(documents: Iterable[Document], *, chunk_size: int = 140, chunk_overlap: int = 24) -> list[Document]:
-    output: list[Document] = []
+def iter_chunked_documents(
+    documents: Iterable[Document],
+    *,
+    chunk_size: int = 140,
+    chunk_overlap: int = 24,
+) -> Iterable[Document]:
     for document in documents:
         parts = split_text(document.text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         if len(parts) == 1:
-            output.append(document)
+            yield document
             continue
         for index, part in enumerate(parts):
             metadata = dict(document.metadata)
             metadata['chunk_index'] = index
             metadata['chunk_total'] = len(parts)
-            output.append(Document(id=stable_hash({'parent_id': document.id, 'chunk_index': index, 'text': part}), text=part, metadata={**metadata, 'parent_id': document.id}))
-    return output
+            yield Document(
+                id=stable_hash({'parent_id': document.id, 'chunk_index': index, 'text': part}),
+                text=part,
+                metadata={**metadata, 'parent_id': document.id},
+            )
+
+
+def chunk_documents(documents: Iterable[Document], *, chunk_size: int = 140, chunk_overlap: int = 24) -> list[Document]:
+    return list(
+        iter_chunked_documents(
+            documents,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
+    )

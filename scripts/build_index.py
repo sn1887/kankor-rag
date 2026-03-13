@@ -5,16 +5,15 @@ import json
 import os
 from pathlib import Path
 
-import numpy as np
-
 from rag_core.contracts.embeddings import Embedder
 from rag_core.impl.corpus_hf_dataset import HFDatasetCorpusSource
 from rag_core.impl.embeddings_deepseek import DeepSeekEmbedder
 from rag_core.impl.embeddings_e5 import HashingEmbedder, MultilingualE5Embedder
 from rag_core.impl.embeddings_gemini import GeminiEmbedder
 from rag_core.impl.embeddings_openai import OpenAIEmbedder
-from rag_core.impl.vector_faiss import FaissVectorStore
-from rag_core.util.text_splitter import chunk_documents
+from rag_core.impl.faiss_streaming import StreamingFaissArtifactWriter
+from rag_core.types import Document
+from rag_core.util.text_splitter import iter_chunked_documents
 
 
 def parse_args() -> argparse.Namespace:
@@ -110,47 +109,84 @@ def _build_embedder(args: argparse.Namespace) -> tuple[Embedder, str]:
     )
 
 
-def embed_in_batches(embedder: Embedder, texts: list[str], batch_size: int) -> np.ndarray:
-    if batch_size <= 0:
-        raise ValueError('--embedding-batch-size must be > 0')
-    if not texts:
-        return np.empty((0, 0), dtype=np.float32)
-    vectors: list[np.ndarray] = []
-    for start in range(0, len(texts), batch_size):
-        end = min(start + batch_size, len(texts))
-        vectors.append(embedder.embed_documents(texts[start:end]))
-        print(f'embedded chunks {end}/{len(texts)}')
-    return np.vstack(vectors).astype(np.float32)
+def _flush_batch(
+    *,
+    embedder: Embedder,
+    writer: StreamingFaissArtifactWriter,
+    documents: list[Document],
+    embedded_so_far: int,
+) -> tuple[list[Document], int]:
+    if not documents:
+        return documents, embedded_so_far
+    vectors = embedder.embed_documents([document.text for document in documents])
+    writer.add_batch(embeddings=vectors, documents=documents)
+    embedded = embedded_so_far + len(documents)
+    print(f'embedded chunks {embedded}')
+    return [], embedded
 
 
 def main() -> None:
     args = parse_args()
     if not args.input and not args.dataset_name:
         raise SystemExit('Provide either --input or --dataset-name.')
+    if args.embedding_batch_size <= 0:
+        raise SystemExit('--embedding-batch-size must be > 0')
 
     source = HFDatasetCorpusSource(dataset_name=args.dataset_name, split=args.split, local_path=args.input)
-    documents = list(source.load_documents())
-    if not documents:
-        raise SystemExit('No documents were loaded from the selected corpus source.')
-
-    chunked = chunk_documents(documents, chunk_size=args.chunk_size, chunk_overlap=args.chunk_overlap)
-    if not chunked:
-        raise SystemExit('No chunks were produced. Adjust chunk settings or verify corpus text content.')
-
     embedder, selected_embedding_model = _build_embedder(args)
-    embeddings = embed_in_batches(embedder, [doc.text for doc in chunked], args.embedding_batch_size)
-    vector_store = FaissVectorStore.build(embeddings, chunked)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     metadata_filename = args.metadata_filename
-    vector_store.save(output_dir / 'index.faiss', output_dir / metadata_filename)
+    index_path = output_dir / 'index.faiss'
+    metadata_path = output_dir / metadata_filename
+
+    documents = 0
+    chunks = 0
+    embedded_chunks = 0
+    pending_batch: list[Document] = []
+    embedding_dimension: int | None = None
+
+    with StreamingFaissArtifactWriter(index_path=index_path, metadata_path=metadata_path) as writer:
+        for source_document in source.load_documents():
+            documents += 1
+            for chunk in iter_chunked_documents(
+                [source_document],
+                chunk_size=args.chunk_size,
+                chunk_overlap=args.chunk_overlap,
+            ):
+                chunks += 1
+                pending_batch.append(chunk)
+                if len(pending_batch) >= args.embedding_batch_size:
+                    pending_batch, embedded_chunks = _flush_batch(
+                        embedder=embedder,
+                        writer=writer,
+                        documents=pending_batch,
+                        embedded_so_far=embedded_chunks,
+                    )
+                    embedding_dimension = writer.dimension
+
+        pending_batch, embedded_chunks = _flush_batch(
+            embedder=embedder,
+            writer=writer,
+            documents=pending_batch,
+            embedded_so_far=embedded_chunks,
+        )
+        embedding_dimension = writer.dimension
+
+        if documents == 0:
+            raise SystemExit('No documents were loaded from the selected corpus source.')
+        if chunks == 0:
+            raise SystemExit('No chunks were produced. Adjust chunk settings or verify corpus text content.')
+
+        writer.save_index()
 
     manifest = {
-        'documents': len(documents),
-        'chunks': len(chunked),
+        'documents': documents,
+        'chunks': chunks,
         'embedding_backend': args.embedding_backend,
         'embedding_model_id': selected_embedding_model,
+        'embedding_dimension': embedding_dimension,
         'embedding_batch_size': args.embedding_batch_size,
         'metadata_filename': metadata_filename,
         'corpus_version': args.corpus_version,
@@ -161,6 +197,3 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-
-
-
