@@ -574,6 +574,22 @@ def _page_count(pdf_path: Path) -> int:
                 return len(pdf.pages)
         except Exception:
             pass
+    # Keep extraction usable even when optional Python PDF libs are unavailable.
+    # Most Linux environments already provide Poppler's `pdfinfo`.
+    if command_exists("pdfinfo"):
+        try:
+            result = subprocess.run(
+                ["pdfinfo", str(pdf_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout:
+                match = re.search(r"^Pages:\s+(\d+)\s*$", result.stdout, flags=re.MULTILINE)
+                if match:
+                    return int(match.group(1))
+        except Exception:
+            pass
     return 0
 
 
