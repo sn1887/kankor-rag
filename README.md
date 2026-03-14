@@ -147,6 +147,101 @@ export DEEPSEEK_API_KEY=<your-key>
 uvicorn kankor_api.main:app --host 127.0.0.1 --port 8000
 ```
 
+## Gemini PDF Embedding 2 Experiment (Single Book)
+
+Use this to test retrieval/generation directly from PDF windows (no OCR/text extraction step).
+
+Target example: `data/raw_pdfs/grade_10/G10-Dr-physic.pdf`
+
+Prepare manifests/query suite only (offline):
+
+```bash
+python scripts/gemini_pdf_retrieval_eval.py \
+  --pdf data/raw_pdfs/grade_10/G10-Dr-physic.pdf \
+  --output-dir data/experiments/g10_physics_gemini_pdf_eval \
+  --dry-run
+```
+
+Run full embedding + retrieval + answer generation:
+
+```bash
+set -a
+source docker/.env.gemini
+set +a
+python -u scripts/gemini_pdf_retrieval_eval.py \
+  --pdf data/raw_pdfs/grade_10/G10-Dr-physic.pdf \
+  --output-dir data/experiments/g10_physics_gemini_pdf_eval \
+  --window-pages 2 \
+  --top-k 5 \
+  --answer-top-k 1 \
+  --response-language fa
+```
+
+Notes:
+- Outputs include `window_manifest.jsonl`, `query_suite.jsonl`, `retrieval_results.jsonl`, `generation_results.jsonl`, and `summary.json`.
+- If your Gemini endpoint rejects multimodal embeddings, retry in Vertex mode:
+  `--vertexai --vertex-project <PROJECT_ID> --vertex-location us-central1`
+- Cost control: `window-pages=2` and `answer-top-k=1` keep generation context small.
+
+## Offline Production Readiness Scoring
+
+Score a completed experiment run without paid API calls:
+
+```bash
+python scripts/rag_eval_report.py \
+  --experiment-dir data/experiments/g10_physics_gemini_pdf_eval
+```
+
+Optional relevance scoring (recommended):
+
+1. Copy `docs/RAG_QUERY_EXPECTATIONS.example.jsonl` and map each `query_id` to expected page ranges.
+2. Run:
+
+```bash
+python scripts/rag_eval_report.py \
+  --experiment-dir data/experiments/g10_physics_gemini_pdf_eval \
+  --expectations-file docs/RAG_QUERY_EXPECTATIONS.example.jsonl
+```
+
+Thresholds are loaded from `docs/RAG_EVAL_THRESHOLDS.json` by default and the report is written to
+`evaluation_report.json` in the experiment directory.
+Use `docs/PRODUCTION_READINESS_CHECKLIST.md` as the rollout gate checklist.
+Note: `query_id` in expectations must exactly match `query_suite.jsonl` / `retrieval_results.jsonl`.
+
+## Build Full PDF Window Index
+
+Build a production-shaped FAISS index directly from all textbook PDFs under `data/raw_pdfs`:
+
+```bash
+set -a
+source docker/.env.gemini
+set +a
+python -u scripts/build_pdf_window_index.py \
+  --input-dir data/raw_pdfs \
+  --grades grade_10 grade_11 grade_12 \
+  --output-dir data/index/kankor_gemini_pdf_window2 \
+  --window-pages 2 \
+  --embedding-model gemini-embedding-2-preview \
+  --corpus-version kankor-corpus@2026.03-gemini-pdf-window2
+```
+
+Dry-run planning only (no API cost):
+
+```bash
+python scripts/build_pdf_window_index.py \
+  --input-dir data/raw_pdfs \
+  --grades grade_10 grade_11 grade_12 \
+  --output-dir data/experiments/full_pdf_build_plan \
+  --window-pages 2 \
+  --dry-run
+```
+
+Output artifacts are API-compatible with current runtime wiring:
+- `index.faiss`
+- `metadata.jsonl`
+- `manifest.json`
+- `window_manifest.jsonl`
+
 ## Corpus Pipeline
 
 ### 1) Extract PDFs to JSONL
@@ -220,6 +315,7 @@ Key environment variables:
 - `RAG_ALLOW_HASH_EMBEDDER_FALLBACK`: `false` by default; set `true` only for explicit degraded-mode tolerance
 - `RAG_MAX_NEW_TOKENS_HARD_LIMIT`: hard upper bound enforced on per-request `max_tokens`
 - `RAG_TEMPERATURE_MIN` / `RAG_TEMPERATURE_MAX`: allowed request temperature range
+- `RAG_DEFAULT_LANGUAGE`: response language policy (`fa` default; use `fa` to keep Dari-first responses)
 - `RAG_UI_INTERFACE`: `openwebui` (default, API-only container) or `nextjs` (runs API + Next.js in one container)
 - `RAG_DEMO_MODE`: set `true` to bypass local model generation
 - `RAG_GENERATION_MODE`: `sample`, `greedy`, or `contrastive`
