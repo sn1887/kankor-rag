@@ -272,6 +272,12 @@ One-command local WhatsApp boot profile (API + Redis):
 ./scripts/whatsapp_local_up.sh
 ```
 
+Rebuild only when needed:
+
+```bash
+./scripts/whatsapp_local_up.sh --build
+```
+
 This starts:
 - WhatsApp API at `http://127.0.0.1:8100`
 - Redis at `redis://127.0.0.1:6379/0`

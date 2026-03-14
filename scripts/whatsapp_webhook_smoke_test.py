@@ -28,6 +28,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--message-id", default="", help="Optional override for WhatsApp message id")
     parser.add_argument("--challenge", default="", help="Optional challenge string")
     parser.add_argument("--timeout", type=float, default=15.0, help="HTTP timeout seconds")
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=8,
+        help="How many transport-level retries to attempt per request",
+    )
+    parser.add_argument(
+        "--retry-delay",
+        type=float,
+        default=1.5,
+        help="Delay in seconds between transport-level retries",
+    )
     return parser.parse_args()
 
 
@@ -83,6 +95,37 @@ def print_response(label: str, response: httpx.Response) -> None:
         print(body)
 
 
+def request_with_retries(
+    client: httpx.Client,
+    *,
+    method: str,
+    url: str,
+    retries: int,
+    retry_delay: float,
+    **kwargs,
+) -> httpx.Response:
+    attempts = max(1, int(retries))
+    delay_seconds = max(0.0, float(retry_delay))
+    last_exc: Exception | None = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            return client.request(method, url, **kwargs)
+        except httpx.HTTPError as exc:
+            last_exc = exc
+            if attempt >= attempts:
+                break
+            print(
+                f"[{method.lower()} retry] attempt {attempt}/{attempts} failed: {exc}. "
+                f"Retrying in {delay_seconds:.1f}s..."
+            )
+            if delay_seconds > 0:
+                time.sleep(delay_seconds)
+
+    assert last_exc is not None
+    raise last_exc
+
+
 def main() -> int:
     args = parse_args()
     base_url = args.base_url.rstrip("/")
@@ -100,21 +143,47 @@ def main() -> int:
     payload_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
     with httpx.Client(timeout=args.timeout) as client:
-        verify_response = client.get(
-            webhook_url,
-            params={
-                "hub.mode": "subscribe",
-                "hub.verify_token": args.verify_token,
-                "hub.challenge": challenge,
-            },
-        )
+        try:
+            verify_response = request_with_retries(
+                client,
+                method="GET",
+                url=webhook_url,
+                retries=args.retries,
+                retry_delay=args.retry_delay,
+                params={
+                    "hub.mode": "subscribe",
+                    "hub.verify_token": args.verify_token,
+                    "hub.challenge": challenge,
+                },
+            )
+        except httpx.HTTPError as exc:
+            print("\n[verify] transport_error")
+            print(str(exc))
+            print("\nSmoke test failed.")
+            return 1
+
         print_response("verify", verify_response)
 
         headers = {"Content-Type": "application/json"}
         if args.webhook_secret.strip():
             headers["X-Hub-Signature-256"] = build_signature(args.webhook_secret.strip(), payload_bytes)
 
-        ingest_response = client.post(webhook_url, content=payload_bytes, headers=headers)
+        try:
+            ingest_response = request_with_retries(
+                client,
+                method="POST",
+                url=webhook_url,
+                retries=args.retries,
+                retry_delay=args.retry_delay,
+                content=payload_bytes,
+                headers=headers,
+            )
+        except httpx.HTTPError as exc:
+            print("\n[ingest] transport_error")
+            print(str(exc))
+            print("\nSmoke test failed.")
+            return 1
+
         print_response("ingest", ingest_response)
 
     verify_ok = verify_response.status_code == 200 and verify_response.text.strip() == challenge
