@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     rag_generation_mode: str = Field(default='sample', alias='RAG_GENERATION_MODE')
     rag_contrastive_penalty_alpha: float = Field(default=0.6, alias='RAG_CONTRASTIVE_PENALTY_ALPHA')
     rag_contrastive_top_k: int = Field(default=4, alias='RAG_CONTRASTIVE_TOP_K')
-    rag_default_language: str = Field(default='auto', alias='RAG_DEFAULT_LANGUAGE')
+    rag_default_language: str = Field(default='fa', alias='RAG_DEFAULT_LANGUAGE')
     rag_corpus_version: str = Field(default='kankor-corpus@2026.03-demo', alias='RAG_CORPUS_VERSION')
     rag_source_pdf_url_template: str = Field(
         default=(

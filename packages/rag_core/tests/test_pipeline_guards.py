@@ -39,6 +39,7 @@ class DummyEmbedder(Embedder):
 
 class DummyVectorStore(VectorStore):
     def __init__(self) -> None:
+        self.search_calls = 0
         self._document = Document(
             id="doc-1",
             text="evidence",
@@ -57,6 +58,7 @@ class DummyVectorStore(VectorStore):
         return 1
 
     def search(self, query_vector: np.ndarray, *, top_k: int, filters=None) -> list[Hit]:
+        self.search_calls += 1
         return [Hit(document=self._document, score=0.99)]
 
 
@@ -90,7 +92,7 @@ def test_stream_answer_uses_guarded_generation_values() -> None:
     pipeline, llm = _make_pipeline()
     events = list(
         pipeline.stream_answer(
-            question="hello",
+            question="Explain photosynthesis",
             history=[],
             max_new_tokens=99999,
             temperature=-5.0,
@@ -103,7 +105,7 @@ def test_stream_answer_uses_guarded_generation_values() -> None:
 
 def test_stream_answer_appends_references_markdown() -> None:
     pipeline, _ = _make_pipeline()
-    events = list(pipeline.stream_answer(question="hello", history=[]))
+    events = list(pipeline.stream_answer(question="Explain photosynthesis", history=[]))
     answer = "".join(
         str(event["data"].get("text", ""))
         for event in events
@@ -112,3 +114,18 @@ def test_stream_answer_appends_references_markdown() -> None:
     assert "### References" in answer
     assert "- [S1]" in answer
     assert "[Open page](" in answer
+
+
+def test_stream_answer_short_circuits_for_greeting() -> None:
+    pipeline, _ = _make_pipeline()
+    events = list(pipeline.stream_answer(question="سلام", history=[]))
+    assert events[0]["type"] == "sources"
+    assert events[0]["data"] == []
+
+    answer = "".join(
+        str(event["data"].get("text", ""))
+        for event in events
+        if event["type"] == "delta"
+    )
+    assert "کانکور" in answer
+    assert pipeline.vector_store.search_calls == 0  # type: ignore[attr-defined]

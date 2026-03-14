@@ -32,10 +32,10 @@ def test_build_system_prompt_includes_exam_and_citation_contract() -> None:
         corpus_version="kankor-corpus@2026.03",
         default_language="auto",
     )
-    assert "exam preparation assistant" in prompt
-    assert "practice questions" in prompt
-    assert "Every factual claim must include inline citations" in prompt
-    assert "Respond in english." in prompt
+    assert "آمادگی کانکور" in prompt
+    assert "سوال تمرینی" in prompt
+    assert "ارجاع درون‌متنی" in prompt
+    assert "زبان پاسخ: دری." in prompt
 
 
 def test_build_context_block_exposes_reference_metadata() -> None:

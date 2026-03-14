@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+import re
 
 from rag_core.contracts.embeddings import Embedder
 from rag_core.contracts.llm import LLMProvider
@@ -12,6 +13,43 @@ from rag_core.rag.citations import (
 )
 from rag_core.rag.prompts import build_chat_messages, build_context_block, build_system_prompt
 from rag_core.types import ChatTurn, Hit
+
+
+_GREETING_PHRASES = {
+    "hi",
+    "hello",
+    "hey",
+    "good morning",
+    "good evening",
+    "good afternoon",
+    "salam",
+    "salaam",
+    "سلام",
+    "سلام علیکم",
+    "سلام عليكم",
+    "السلام علیکم",
+    "السلام عليكم",
+    "سلامونه",
+    "درود",
+    "مرحبا",
+    "اهلا",
+}
+
+_GREETING_TOKENS = {
+    "hi",
+    "hello",
+    "hey",
+    "salam",
+    "salaam",
+    "سلام",
+    "سلامونه",
+    "درود",
+    "مرحبا",
+    "اهلا",
+    "السلام",
+    "علیکم",
+    "عليكم",
+}
 
 
 class RAGPipeline:
@@ -49,6 +87,36 @@ class RAGPipeline:
         self.default_language = default_language
         self.source_pdf_url_template = source_pdf_url_template
 
+    @staticmethod
+    def _normalize_user_text(text: str) -> str:
+        cleaned = re.sub(r"[^\w\u0600-\u06FF\s]", " ", text.lower(), flags=re.UNICODE)
+        return re.sub(r"\s+", " ", cleaned, flags=re.UNICODE).strip()
+
+    @classmethod
+    def _is_greeting_only(cls, question: str) -> bool:
+        normalized = cls._normalize_user_text(question)
+        if not normalized or len(normalized) > 80:
+            return False
+        if normalized in _GREETING_PHRASES:
+            return True
+        tokens = normalized.split()
+        if len(tokens) > 4:
+            return False
+        return all(token in _GREETING_TOKENS for token in tokens)
+
+    @classmethod
+    def _smalltalk_response(cls, question: str) -> str | None:
+        if not cls._is_greeting_only(question):
+            return None
+        normalized = cls._normalize_user_text(question)
+        if re.search(r"[ټځڅډړږښګڼۍې]", question):
+            return "سلام! څنګه مرسته درسره وکړم؟ د کانکور د مضمون، فصل یا مفهوم نوم راکړه."
+        if any(term in normalized for term in ("مرحبا", "اهلا", "السلام")):
+            return "مرحباً! كيف يمكنني مساعدتك في التحضير للكانكور؟ اكتب المادة أو الفصل أو المفهوم."
+        if re.search(r"[a-z]", question.lower()):
+            return "Hi! How can I help with your Kankor prep today? Tell me the subject, chapter, or concept."
+        return "سلام! خوش آمدید. بگویید روی کدام مضمون، فصل یا مفهوم کانکور کار کنیم."
+
     def retrieve(self, question: str) -> list[Hit]:
         query_vector = self.embedder.embed_query(question)
         hits = self.vector_store.search(query_vector, top_k=self.top_k)
@@ -84,6 +152,12 @@ class RAGPipeline:
         max_new_tokens: int | None = None,
         temperature: float | None = None,
     ) -> Iterator[dict]:
+        smalltalk = self._smalltalk_response(question)
+        if smalltalk is not None:
+            yield {'type': 'sources', 'data': []}
+            yield {'type': 'delta', 'data': {'text': smalltalk}}
+            return
+
         hits = self.retrieve(question)
         source_payload = hits_to_source_payload(
             hits,
