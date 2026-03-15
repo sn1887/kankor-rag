@@ -6,12 +6,29 @@ import re
 from rag_core.contracts.embeddings import Embedder
 from rag_core.contracts.llm import LLMProvider
 from rag_core.contracts.vector_store import VectorStore
+from rag_core.rag.adaptive_retrieval import (
+    RetrievalAssessment,
+    assess_retrieval_confidence,
+    expand_local_window_hits,
+    filter_topic_locator_hits,
+    find_topic_locator_chapter_hits,
+    merge_retrieval_hits,
+)
 from rag_core.rag.citations import (
     DEFAULT_SOURCE_PDF_URL_TEMPLATE,
     build_references_suffix,
     hits_to_source_payload,
 )
-from rag_core.rag.prompts import build_chat_messages, build_context_block, build_system_prompt
+from rag_core.rag.context_plugins import (
+    GroundingContextPlugin,
+    TextGroundingContextPlugin,
+)
+from rag_core.rag.intent_router import IntentRouter, RAGIntent, RETRIEVAL_INTENTS
+from rag_core.rag.prompts import (
+    build_system_prompt,
+    build_task_directive,
+)
+from rag_core.rag.toc_locator import TOCIndex
 from rag_core.types import ChatTurn, Hit
 
 
@@ -69,6 +86,12 @@ class RAGPipeline:
         temperature_max: float = 2.0,
         default_language: str = 'auto',
         source_pdf_url_template: str | None = DEFAULT_SOURCE_PDF_URL_TEMPLATE,
+        intent_router: IntentRouter | None = None,
+        grounding_context_plugin: GroundingContextPlugin | None = None,
+        local_expansion_neighbors: int = 1,
+        retrieval_confidence_top_score: float = 0.27,
+        retrieval_confidence_min_hits: int = 1,
+        toc_index: TOCIndex | None = None,
     ) -> None:
         self.llm = llm
         self.embedder = embedder
@@ -86,6 +109,12 @@ class RAGPipeline:
             raise ValueError("temperature_min must be <= temperature_max")
         self.default_language = default_language
         self.source_pdf_url_template = source_pdf_url_template
+        self.intent_router = intent_router or IntentRouter()
+        self.grounding_context_plugin = grounding_context_plugin or TextGroundingContextPlugin()
+        self.local_expansion_neighbors = max(0, int(local_expansion_neighbors))
+        self.retrieval_confidence_top_score = float(retrieval_confidence_top_score)
+        self.retrieval_confidence_min_hits = max(1, int(retrieval_confidence_min_hits))
+        self.toc_index = toc_index
 
     @staticmethod
     def _normalize_user_text(text: str) -> str:
@@ -117,13 +146,38 @@ class RAGPipeline:
             return "Hi! How can I help with your Kankor prep today? Tell me the subject, chapter, or concept."
         return "سلام! خوش آمدید. بگویید روی کدام مضمون، فصل یا مفهوم کانکور کار کنیم."
 
-    def retrieve(self, question: str) -> list[Hit]:
+    def _search_query(self, question: str) -> list[Hit]:
         query_vector = self.embedder.embed_query(question)
-        hits = self.vector_store.search(query_vector, top_k=self.top_k)
-        return [hit for hit in hits if hit.score >= self.min_score]
+        return self.vector_store.search(query_vector, top_k=self.top_k)
 
-    def _fallback_response(self, question: str) -> str:
-        return 'I could not find strong supporting evidence in the current indexed corpus for this question. Please try a more specific phrasing, switch to a closer subject category, or refresh the corpus/index version. ' + f'Current corpus version: {self.corpus_version}. Question: {question}'
+    def retrieve(self, question: str) -> list[Hit]:
+        return self.retrieve_many([question])
+
+    def retrieve_many(self, questions: Sequence[str]) -> list[Hit]:
+        hit_groups: list[list[Hit]] = []
+        for question in questions:
+            cleaned = question.strip()
+            if not cleaned:
+                continue
+            hit_groups.append(self._search_query(cleaned))
+        if not hit_groups:
+            return []
+        return merge_retrieval_hits(
+            hit_groups=hit_groups,
+            top_k=self.top_k,
+            min_score=self.min_score,
+        )
+
+    def _confidence_fallback_response(self) -> str:
+        return "I can give general guidance, but I could not verify this from the textbooks."
+
+    @staticmethod
+    def _should_retrieve(intent: RAGIntent) -> bool:
+        return intent in RETRIEVAL_INTENTS
+
+    @staticmethod
+    def _should_expand_neighbors(intent: RAGIntent) -> bool:
+        return intent in {RAGIntent.GROUNDED_TEXTBOOK, RAGIntent.PRACTICE_GENERATION}
 
     def resolve_generation_params(
         self,
@@ -152,40 +206,127 @@ class RAGPipeline:
         max_new_tokens: int | None = None,
         temperature: float | None = None,
     ) -> Iterator[dict]:
-        smalltalk = self._smalltalk_response(question)
-        if smalltalk is not None:
+        route = self.intent_router.route(question=question, history=history)
+        intent = route.intent
+
+        if intent == RAGIntent.SMALLTALK:
+            smalltalk = self._smalltalk_response(question) or "سلام! چگونه می‌توانم برای آمادگی کانکور کمک کنم؟"
             yield {'type': 'sources', 'data': []}
             yield {'type': 'delta', 'data': {'text': smalltalk}}
             return
 
-        hits = self.retrieve(question)
-        source_payload = hits_to_source_payload(
-            hits,
-            self.corpus_version,
-            source_pdf_url_template=self.source_pdf_url_template,
+        retrieval_assessment: RetrievalAssessment | None = None
+        hits: list[Hit] = []
+        if self._should_retrieve(intent):
+            queries = route.retrieval_queries or [question]
+            hits = self.retrieve_many(queries)
+            if intent == RAGIntent.TOPIC_LOCATOR:
+                toc_hits: list[Hit] = []
+                if self.toc_index is not None:
+                    toc_hits = self.toc_index.search(
+                        question=question,
+                        top_k=self.top_k,
+                    )
+                if toc_hits:
+                    hits = merge_retrieval_hits(
+                        hit_groups=[toc_hits, hits],
+                        top_k=self.top_k,
+                        min_score=self.min_score,
+                    )
+                chapter_hits = find_topic_locator_chapter_hits(
+                    question=question,
+                    vector_store=self.vector_store,
+                    top_k=self.top_k,
+                )
+                if chapter_hits:
+                    hits = merge_retrieval_hits(
+                        hit_groups=[hits, chapter_hits],
+                        top_k=self.top_k,
+                        min_score=self.min_score,
+                    )
+                hits = filter_topic_locator_hits(
+                    hits=hits,
+                    question=question,
+                    top_k=self.top_k,
+                )
+            if self._should_expand_neighbors(intent):
+                hits = expand_local_window_hits(
+                    hits=hits,
+                    vector_store=self.vector_store,
+                    neighbors_per_side=self.local_expansion_neighbors,
+                    max_hits=self.top_k + (self.local_expansion_neighbors * 2),
+                )
+            retrieval_assessment = assess_retrieval_confidence(
+                hits=hits,
+                min_top_score=self.retrieval_confidence_top_score,
+                min_hits=self.retrieval_confidence_min_hits,
+            )
+
+        source_payload = (
+            hits_to_source_payload(
+                hits,
+                self.corpus_version,
+                source_pdf_url_template=self.source_pdf_url_template,
+            )
+            if self._should_retrieve(intent)
+            else []
         )
-        yield {
-            'type': 'sources',
-            'data': source_payload,
-        }
-        if not hits:
-            for token in self._fallback_response(question).split(' '):
+        yield {'type': 'sources', 'data': source_payload}
+
+        if self._should_retrieve(intent) and retrieval_assessment is not None and retrieval_assessment.weak:
+            for token in self._confidence_fallback_response().split(' '):
                 yield {'type': 'delta', 'data': {'text': token + ' '}}
             return
+
         resolved_max_new_tokens, resolved_temperature = self.resolve_generation_params(
             max_new_tokens=max_new_tokens,
             temperature=temperature,
         )
-        system_prompt = build_system_prompt(question=question, hits=hits, corpus_version=self.corpus_version, default_language=self.default_language)
-        context_block = build_context_block(hits)
-        messages = build_chat_messages(question=question, history=history, context_block=context_block)
+        task_directive = build_task_directive(
+            question=question,
+            hits=hits,
+            intent=intent.value,
+        )
+        system_prompt = build_system_prompt(
+            question=question,
+            hits=hits,
+            corpus_version=self.corpus_version,
+            default_language=self.default_language,
+            intent=intent.value,
+        )
+        request = self.grounding_context_plugin.build(
+            question=question,
+            history=history,
+            hits=hits,
+            grounded=self._should_retrieve(intent),
+            intent=intent.value,
+            task_directive=task_directive,
+            corpus_version=self.corpus_version,
+        )
+        if request.attachments and not self.llm.supports_attachments:
+            request = TextGroundingContextPlugin().build(
+                question=question,
+                history=history,
+                hits=hits,
+                grounded=self._should_retrieve(intent),
+                intent=intent.value,
+                task_directive=task_directive,
+                corpus_version=self.corpus_version,
+            )
         generated_chunks: list[str] = []
-        for token in self.llm.stream_chat(messages=messages, system_prompt=system_prompt, max_new_tokens=resolved_max_new_tokens, temperature=resolved_temperature):
+        for token in self.llm.stream_chat(
+            messages=request.messages,
+            system_prompt=system_prompt,
+            max_new_tokens=resolved_max_new_tokens,
+            temperature=resolved_temperature,
+            attachments=request.attachments,
+        ):
             generated_chunks.append(token)
             yield {'type': 'delta', 'data': {'text': token}}
-        references_suffix = build_references_suffix(
-            answer_markdown=''.join(generated_chunks),
-            sources=source_payload,
-        )
-        if references_suffix:
-            yield {'type': 'delta', 'data': {'text': references_suffix}}
+        if self._should_retrieve(intent):
+            references_suffix = build_references_suffix(
+                answer_markdown=''.join(generated_chunks),
+                sources=source_payload,
+            )
+            if references_suffix:
+                yield {'type': 'delta', 'data': {'text': references_suffix}}

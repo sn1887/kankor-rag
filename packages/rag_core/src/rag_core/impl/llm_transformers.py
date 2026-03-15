@@ -3,7 +3,7 @@ from collections.abc import Iterator, Sequence
 from threading import Lock, Thread
 
 from rag_core.contracts.llm import LLMProvider
-from rag_core.types import ChatTurn
+from rag_core.types import ChatAttachment, ChatTurn
 
 
 class TransformersLLMProvider(LLMProvider):
@@ -78,7 +78,10 @@ class TransformersLLMProvider(LLMProvider):
         system_prompt: str,
         max_new_tokens: int,
         temperature: float,
+        attachments: Sequence[ChatAttachment] | None = None,
     ) -> Iterator[str]:
+        if attachments:
+            raise ValueError("Local transformers backend does not support binary attachments.")
         if self.demo_mode:
             yield from self._demo_stream(messages)
             return

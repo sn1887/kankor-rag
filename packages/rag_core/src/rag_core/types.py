@@ -18,3 +18,11 @@ class Hit:
 class ChatTurn:
     role: Literal['user', 'assistant', 'system']
     content: str
+
+
+@dataclass(slots=True)
+class ChatAttachment:
+    media_type: str
+    data: bytes
+    label: str = ""
+    metadata: Metadata = field(default_factory=dict)

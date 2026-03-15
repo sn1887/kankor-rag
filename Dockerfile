@@ -16,7 +16,8 @@ COPY README.md /app/README.md
 
 RUN python3 -m venv /app/.venv \
   && /app/.venv/bin/python -m pip install -U pip setuptools wheel \
-  && /app/.venv/bin/python -m pip install -e '/app/packages/rag_core[serve]' -e /app/apps/api
+  && /app/.venv/bin/python -m pip install -e '/app/packages/rag_core[serve]' -e /app/apps/api \
+  && /app/.venv/bin/python -m pip install 'google-genai>=1.0.0'
 ENV PATH="/app/.venv/bin:${PATH}"
 
 WORKDIR /app/apps/web
