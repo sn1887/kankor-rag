@@ -3,9 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="${ROOT_DIR}/docker/docker-compose.openwebui.yml"
-DEFAULT_ENV_FILE="${ROOT_DIR}/.env.whatsapp.example"
-WAIT_TIMEOUT_SECONDS="${WHATSAPP_LOCAL_WAIT_TIMEOUT_SECONDS:-120}"
-WAIT_INTERVAL_SECONDS="${WHATSAPP_LOCAL_WAIT_INTERVAL_SECONDS:-2}"
+DEFAULT_ENV_FILE="${ROOT_DIR}/docker/.env"
+WAIT_TIMEOUT_SECONDS="${OPENWEBUI_LOCAL_WAIT_TIMEOUT_SECONDS:-120}"
+WAIT_INTERVAL_SECONDS="${OPENWEBUI_LOCAL_WAIT_INTERVAL_SECONDS:-2}"
 
 ENV_FILE="${DEFAULT_ENV_FILE}"
 if [[ $# -gt 0 && "${1}" != -* ]]; then
@@ -51,25 +51,23 @@ done
 docker compose \
   -f "${COMPOSE_FILE}" \
   --env-file "${ENV_FILE}" \
-  --profile whatsapp-local \
-  up --force-recreate ${BUILD_FLAG} "${PASSTHRU_ARGS[@]}" api-whatsapp redis
+  up --force-recreate ${BUILD_FLAG} "${PASSTHRU_ARGS[@]}" api openwebui
 
 if [[ "${DETACHED}" -eq 1 ]]; then
-  echo "Waiting for api-whatsapp to become ready on http://127.0.0.1:8100/v1/health ..."
+  echo "Waiting for api to become ready on http://127.0.0.1:8000/v1/health ..."
   deadline=$((SECONDS + WAIT_TIMEOUT_SECONDS))
   while (( SECONDS < deadline )); do
-    if curl --silent --show-error --max-time 2 http://127.0.0.1:8100/v1/health >/dev/null 2>&1; then
-      echo "api-whatsapp is ready."
+    if curl --silent --show-error --max-time 2 http://127.0.0.1:8000/v1/health >/dev/null 2>&1; then
+      echo "api is ready."
       exit 0
     fi
     sleep "${WAIT_INTERVAL_SECONDS}"
   done
 
-  echo "api-whatsapp was not ready within ${WAIT_TIMEOUT_SECONDS}s. Recent logs:" >&2
+  echo "api was not ready within ${WAIT_TIMEOUT_SECONDS}s. Recent logs:" >&2
   docker compose \
     -f "${COMPOSE_FILE}" \
     --env-file "${ENV_FILE}" \
-    --profile whatsapp-local \
-    logs --tail=120 api-whatsapp redis >&2 || true
+    logs --tail=120 api openwebui >&2 || true
   exit 1
 fi

@@ -8,7 +8,7 @@ The repository is structured for local development and deployment as a Hugging F
 - OpenWebUI as the default interface (connected through OpenAI-compatible API routes)
 - FastAPI backend (`apps/api`) with both custom SSE (`/v1/chat/stream`) and OpenAI-compatible (`/v1/chat/completions`, `/v1/models`) endpoints
 - Optional Next.js frontend (`apps/web`) for custom source-panel UX
-- Reusable core package (`packages/rag_core`) with pluggable embeddings + LLM providers (`hash`, `e5`, `openai`, `gemini`, `deepseek`, `transformers`)
+- Reusable core package (`packages/rag_core`) with pluggable embeddings + LLM providers (`hash`, `e5`, `openai`, `gemini`, `gemini_native`, `deepseek`, `transformers`)
 - Offline data pipeline (`scripts/`) for PDF ingestion, corpus audit, and FAISS index build
 - Docker startup (`docker/`) with OpenWebUI-first API mode and optional Next.js mode
 
@@ -30,14 +30,20 @@ cd ../..
 Run OpenWebUI + API together (recommended):
 
 ```bash
-cd docker
-cp .env.example .env
-RAG_OPENAI_COMPAT_API_KEY=changeme docker compose -f docker-compose.openwebui.yml up --build
+cp docker/.env.example docker/.env
+./scripts/openwebui_local_up.sh docker/.env --build -d
+```
+
+Gemini preset:
+
+```bash
+./scripts/openwebui_local_up.sh docker/.env.gemini --build -d
 ```
 
 Then open `http://127.0.0.1:3000`.
 
 The API is exposed at `http://127.0.0.1:8000/v1`, and OpenWebUI uses the OpenAI-compatible endpoints automatically.
+The helper script sources the selected env file and runs Compose with `--force-recreate` so env-file values win over stale shell exports.
 
 ## Quick Demo (Local)
 
@@ -222,8 +228,30 @@ python -u scripts/build_pdf_window_index.py \
   --output-dir data/index/kankor_gemini_pdf_window2 \
   --window-pages 2 \
   --embedding-model gemini-embedding-2-preview \
+  --checkpoint-every 25 \
+  --request-timeout-ms 120000 \
+  --retry-attempts 5 \
   --corpus-version kankor-corpus@2026.03-gemini-pdf-window2
 ```
+
+Resume a previously interrupted run from saved `index.faiss` + `metadata.jsonl`:
+
+```bash
+python -u scripts/build_pdf_window_index.py \
+  --input-dir data/raw_pdfs \
+  --grades grade_10 grade_11 grade_12 \
+  --output-dir data/index/kankor_gemini_pdf_window2 \
+  --window-pages 2 \
+  --embedding-model gemini-embedding-2-preview \
+  --checkpoint-every 25 \
+  --request-timeout-ms 120000 \
+  --retry-attempts 5 \
+  --resume \
+  --corpus-version kankor-corpus@2026.03-gemini-pdf-window2
+```
+
+Note: `--resume` requires a saved `index.faiss` checkpoint. If only `metadata.jsonl` exists, vectors were not
+persisted yet and the run must restart from scratch.
 
 Dry-run planning only (no API cost):
 
@@ -241,6 +269,14 @@ Output artifacts are API-compatible with current runtime wiring:
 - `metadata.jsonl`
 - `manifest.json`
 - `window_manifest.jsonl`
+
+Optional TOC manifest (recommended for chapter/title locator quality):
+
+```bash
+python scripts/build_toc_manifest.py \
+  --metadata-path data/index/kankor_gemini_pdf_window2/metadata.jsonl \
+  --output-path data/index/kankor_gemini_pdf_window2/toc_manifest.jsonl
+```
 
 ## Corpus Pipeline
 
@@ -288,9 +324,12 @@ python scripts/build_index.py \
 Key environment variables:
 
 - `RAG_INDEX_PATH` and `RAG_DOCSTORE_PATH`: FAISS and metadata paths
+- `RAG_TOC_MANIFEST_PATH`: optional TOC manifest used first for chapter/title topic-locator queries
 - `RAG_VECTOR_STORE_BACKEND`: vector backend key (`faiss`) or `module.path:factory`
-- `RAG_LLM_BACKEND`: `transformers`, `openai`, `gemini`, `deepseek`, or `module.path:factory`
+- `RAG_LLM_BACKEND`: `transformers`, `openai`, `gemini`, `gemini_native`, `deepseek`, or `module.path:factory`
 - `RAG_EMBEDDING_BACKEND`: `hash`, `e5`, `openai`, `gemini`, `deepseek`, or `module.path:factory`
+- `RAG_CONTEXT_MODE`: `text` (default) or `pdf_windows` for attachment-based grounding
+- `RAG_PDF_WINDOW_MAX_ATTACHMENTS`: max retrieved PDF windows attached per request in `pdf_windows` mode
 - `RAG_MODEL_ID`: Hugging Face model id for local transformers generation
 - `RAG_EMBEDDING_MODEL_ID`: local E5 embedding model id
 - `RAG_OPENAI_MODEL_ID`: OpenAI model id for chat generation
@@ -303,7 +342,11 @@ Key environment variables:
 - `RAG_GEMINI_API_KEY`: Gemini key override (falls back to `GEMINI_API_KEY`)
 - `RAG_GEMINI_BASE_URL`: Gemini OpenAI-compatible base URL (default `https://generativelanguage.googleapis.com/v1beta/openai`)
 - `RAG_GEMINI_TIMEOUT_SECONDS`: timeout for Gemini requests
+- `RAG_GEMINI_FALLBACK_MODEL_ID`: optional backup model for `gemini_native` when primary model is transiently unavailable
+- `RAG_GEMINI_NATIVE_RETRY_ATTEMPTS`: retry attempts per Gemini model for transient overload/rate-limit errors
+- `RAG_GEMINI_NATIVE_RETRY_DELAY_SECONDS`: base delay between Gemini retry attempts (linear backoff)
 - `RAG_GEMINI_EMBEDDING_DIMENSIONS`: optional output dimensions for Gemini embeddings
+- Note: `gemini_native` uses `google-genai` directly and supports binary PDF window attachments.
 - `RAG_DEEPSEEK_MODEL_ID` / `RAG_DEEPSEEK_EMBEDDING_MODEL_ID`: DeepSeek model ids
 - `RAG_DEEPSEEK_API_KEY`: DeepSeek key override (falls back to `DEEPSEEK_API_KEY`)
 - `RAG_DEEPSEEK_BASE_URL`: DeepSeek OpenAI-compatible base URL (default `https://api.deepseek.com/v1`)
@@ -367,6 +410,8 @@ One-command local WhatsApp boot profile (API + Redis):
 ```bash
 ./scripts/whatsapp_local_up.sh
 ```
+
+The helper script sources the selected env file and runs Compose with `--force-recreate` so env-file values win over stale shell exports.
 
 Rebuild only when needed:
 
