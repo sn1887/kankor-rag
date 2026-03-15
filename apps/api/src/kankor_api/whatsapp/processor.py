@@ -66,13 +66,19 @@ class WhatsAppMessageProcessor:
             )
         except Exception:
             logger.exception("Failed to process WhatsApp message %s", message.message_id)
-            await self.messenger.send_text(
-                to=message.from_wa_id,
-                text=(
-                    "The service is temporarily busy. Please try again in a minute."
-                ),
-                in_reply_to_message_id=message.message_id,
-            )
+            try:
+                await self.messenger.send_text(
+                    to=message.from_wa_id,
+                    text=(
+                        "The service is temporarily busy. Please try again in a minute."
+                    ),
+                    in_reply_to_message_id=message.message_id,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to send WhatsApp fallback message %s",
+                    message.message_id,
+                )
 
     async def _resolve_question(self, *, message) -> str:
         if message.message_type == "text" and message.text is not None:

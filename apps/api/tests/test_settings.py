@@ -45,6 +45,23 @@ def test_active_llm_model_id_for_deepseek(monkeypatch) -> None:
     assert settings.active_llm_model_id == "deepseek-reasoner"
 
 
+def test_active_llm_model_id_for_gemini_native(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_LLM_BACKEND", "gemini_native")
+    monkeypatch.setenv("RAG_GEMINI_MODEL_ID", "gemini-2.5-flash")
+    settings = Settings()
+    assert settings.active_llm_model_id == "gemini-2.5-flash"
+
+
+def test_gemini_native_retry_settings_are_loaded(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_GEMINI_NATIVE_RETRY_ATTEMPTS", "3")
+    monkeypatch.setenv("RAG_GEMINI_NATIVE_RETRY_DELAY_SECONDS", "1.75")
+    monkeypatch.setenv("RAG_GEMINI_FALLBACK_MODEL_ID", "gemini-2.0-flash")
+    settings = Settings()
+    assert settings.rag_gemini_native_retry_attempts == 3
+    assert settings.rag_gemini_native_retry_delay_seconds == 1.75
+    assert settings.rag_gemini_fallback_model_id == "gemini-2.0-flash"
+
+
 def test_embedding_dimensions_accept_empty_env_as_none(monkeypatch) -> None:
     monkeypatch.setenv("RAG_GEMINI_EMBEDDING_DIMENSIONS", "")
     monkeypatch.setenv("RAG_DEEPSEEK_EMBEDDING_DIMENSIONS", "")

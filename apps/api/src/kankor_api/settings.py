@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     rag_model_id: str = Field(default='Qwen/Qwen3.5-2B', alias='RAG_MODEL_ID')
     rag_openai_model_id: str = Field(default='gpt-4o-mini', alias='RAG_OPENAI_MODEL_ID')
     rag_gemini_model_id: str = Field(default='gemini-2.0-flash', alias='RAG_GEMINI_MODEL_ID')
+    rag_gemini_fallback_model_id: str | None = Field(default=None, alias='RAG_GEMINI_FALLBACK_MODEL_ID')
     rag_deepseek_model_id: str = Field(default='deepseek-chat', alias='RAG_DEEPSEEK_MODEL_ID')
     rag_embedding_model_id: str = Field(default='intfloat/multilingual-e5-small', alias='RAG_EMBEDDING_MODEL_ID')
     rag_openai_embedding_model_id: str = Field(default='text-embedding-3-small', alias='RAG_OPENAI_EMBEDDING_MODEL_ID')
@@ -27,6 +28,8 @@ class Settings(BaseSettings):
     rag_gemini_api_key: str | None = Field(default=None, alias='RAG_GEMINI_API_KEY')
     rag_gemini_base_url: str = Field(default='https://generativelanguage.googleapis.com/v1beta/openai', alias='RAG_GEMINI_BASE_URL')
     rag_gemini_timeout_seconds: float = Field(default=120.0, alias='RAG_GEMINI_TIMEOUT_SECONDS')
+    rag_gemini_native_retry_attempts: int = Field(default=2, alias='RAG_GEMINI_NATIVE_RETRY_ATTEMPTS')
+    rag_gemini_native_retry_delay_seconds: float = Field(default=1.0, alias='RAG_GEMINI_NATIVE_RETRY_DELAY_SECONDS')
     rag_gemini_embedding_dimensions: int | None = Field(default=None, alias='RAG_GEMINI_EMBEDDING_DIMENSIONS')
     rag_deepseek_api_key: str | None = Field(default=None, alias='RAG_DEEPSEEK_API_KEY')
     rag_deepseek_base_url: str = Field(default='https://api.deepseek.com/v1', alias='RAG_DEEPSEEK_BASE_URL')
@@ -36,9 +39,19 @@ class Settings(BaseSettings):
     rag_chat_api_key: str | None = Field(default=None, alias='RAG_CHAT_API_KEY')
     rag_index_path: str = Field(default='data/sample_index/index.faiss', alias='RAG_INDEX_PATH')
     rag_docstore_path: str = Field(default='data/sample_index/metadata.jsonl', alias='RAG_DOCSTORE_PATH')
+    rag_toc_manifest_path: str | None = Field(default=None, alias='RAG_TOC_MANIFEST_PATH')
     rag_vector_store_backend: str = Field(default='faiss', alias='RAG_VECTOR_STORE_BACKEND')
+    rag_context_mode: str = Field(default='text', alias='RAG_CONTEXT_MODE')
+    rag_pdf_window_max_attachments: int = Field(default=3, alias='RAG_PDF_WINDOW_MAX_ATTACHMENTS')
     rag_top_k: int = Field(default=5, alias='RAG_TOP_K')
     rag_min_score: float = Field(default=0.15, alias='RAG_MIN_SCORE')
+    rag_local_expansion_neighbors: int = Field(default=1, alias='RAG_LOCAL_EXPANSION_NEIGHBORS')
+    rag_retrieval_confidence_top_score: float = Field(default=0.27, alias='RAG_RETRIEVAL_CONFIDENCE_TOP_SCORE')
+    rag_retrieval_confidence_min_hits: int = Field(default=1, alias='RAG_RETRIEVAL_CONFIDENCE_MIN_HITS')
+    rag_intent_router_max_decomposition_queries: int = Field(
+        default=4,
+        alias='RAG_INTENT_ROUTER_MAX_DECOMPOSITION_QUERIES',
+    )
     rag_max_new_tokens: int = Field(default=256, alias='RAG_MAX_NEW_TOKENS')
     rag_max_new_tokens_hard_limit: int = Field(default=1024, alias='RAG_MAX_NEW_TOKENS_HARD_LIMIT')
     rag_temperature: float = Field(default=0.2, alias='RAG_TEMPERATURE')
@@ -124,7 +137,7 @@ class Settings(BaseSettings):
         backend = self.rag_llm_backend.lower().strip()
         if backend == 'openai':
             return self.rag_openai_model_id
-        if backend == 'gemini':
+        if backend in {'gemini', 'gemini_native'}:
             return self.rag_gemini_model_id
         if backend == 'deepseek':
             return self.rag_deepseek_model_id

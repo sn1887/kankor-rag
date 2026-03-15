@@ -15,10 +15,18 @@ from rag_core.impl.embeddings_gemini import GeminiEmbedder
 from rag_core.impl.embeddings_openai import OpenAIEmbedder
 from rag_core.impl.llm_deepseek import DeepSeekLLMProvider
 from rag_core.impl.llm_gemini import GeminiLLMProvider
+from rag_core.impl.llm_gemini_native import GeminiNativeLLMProvider
 from rag_core.impl.llm_openai import OpenAILLMProvider
 from rag_core.impl.llm_transformers import TransformersLLMProvider
 from rag_core.impl.vector_faiss import FaissVectorStore
+from rag_core.rag.context_plugins import (
+    GroundingContextPlugin,
+    PdfWindowGroundingContextPlugin,
+    TextGroundingContextPlugin,
+)
+from rag_core.rag.intent_router import IntentRouter
 from rag_core.rag.pipeline import RAGPipeline
+from rag_core.rag.toc_locator import TOCIndex
 
 from .compatibility import (
     load_index_manifest,
@@ -159,6 +167,22 @@ def _build_gemini_llm(settings: Settings) -> LLMProvider:
     )
 
 
+def _build_gemini_native_llm(settings: Settings) -> LLMProvider:
+    api_key = _require_api_key(
+        settings.resolved_gemini_api_key,
+        backend='gemini native llm',
+        env_hints=('RAG_GEMINI_API_KEY', 'GEMINI_API_KEY'),
+    )
+    return GeminiNativeLLMProvider(
+        model_name=settings.rag_gemini_model_id,
+        fallback_model_name=settings.rag_gemini_fallback_model_id,
+        api_key=api_key,
+        timeout_seconds=settings.rag_gemini_timeout_seconds,
+        retry_attempts=settings.rag_gemini_native_retry_attempts,
+        retry_delay_seconds=settings.rag_gemini_native_retry_delay_seconds,
+    )
+
+
 def _build_deepseek_llm(settings: Settings) -> LLMProvider:
     api_key = _require_api_key(
         settings.resolved_deepseek_api_key,
@@ -286,6 +310,7 @@ LLM_FACTORIES: dict[str, Callable[[Settings], LLMProvider]] = {
     "transformers": _build_transformers_llm,
     "openai": _build_openai_llm,
     "gemini": _build_gemini_llm,
+    "gemini_native": _build_gemini_native_llm,
     "deepseek": _build_deepseek_llm,
 }
 
@@ -374,6 +399,17 @@ def _build_llm(settings: Settings) -> LLMProvider:
     return factory(settings)
 
 
+def _build_grounding_context_plugin(settings: Settings) -> GroundingContextPlugin:
+    mode = settings.rag_context_mode.strip().lower()
+    if mode == "text":
+        return TextGroundingContextPlugin()
+    if mode == "pdf_windows":
+        return PdfWindowGroundingContextPlugin(
+            max_attachments=settings.rag_pdf_window_max_attachments,
+        )
+    raise ValueError('Unsupported RAG context mode. Use "text" or "pdf_windows".')
+
+
 def _build_vector_store(settings: Settings) -> VectorStore:
     factory = _resolve_factory(
         settings.rag_vector_store_backend,
@@ -381,6 +417,17 @@ def _build_vector_store(settings: Settings) -> VectorStore:
         kind="vector store",
     )
     return factory(settings)
+
+
+def _build_toc_index(settings: Settings) -> TOCIndex | None:
+    configured = (settings.rag_toc_manifest_path or "").strip()
+    if configured:
+        toc_path = Path(configured)
+    else:
+        toc_path = Path(settings.rag_docstore_path).resolve().parent / "toc_manifest.jsonl"
+    if not toc_path.exists():
+        return None
+    return TOCIndex.load(toc_path)
 
 
 def _build_whatsapp_runtime(settings: Settings, *, pipeline: RAGPipeline) -> WhatsAppRuntime | None:
@@ -474,6 +521,7 @@ def get_app_state() -> AppState:
     )
     embedder = _build_embedder(settings, expected_dimension=expected_embedding_dimension)
     llm = _build_llm(settings)
+    toc_index = _build_toc_index(settings)
     validate_index_runtime_compatibility(
         settings=settings,
         vector_store=vector_store,
@@ -487,6 +535,13 @@ def get_app_state() -> AppState:
         corpus_version=settings.rag_corpus_version,
         top_k=settings.rag_top_k,
         min_score=settings.rag_min_score,
+        intent_router=IntentRouter(
+            max_decomposition_queries=settings.rag_intent_router_max_decomposition_queries,
+        ),
+        local_expansion_neighbors=settings.rag_local_expansion_neighbors,
+        retrieval_confidence_top_score=settings.rag_retrieval_confidence_top_score,
+        retrieval_confidence_min_hits=settings.rag_retrieval_confidence_min_hits,
+        toc_index=toc_index,
         max_new_tokens=settings.rag_max_new_tokens,
         max_new_tokens_limit=settings.rag_max_new_tokens_hard_limit,
         temperature=settings.rag_temperature,
@@ -494,6 +549,7 @@ def get_app_state() -> AppState:
         temperature_max=settings.rag_temperature_max,
         default_language=settings.rag_default_language,
         source_pdf_url_template=settings.rag_source_pdf_url_template,
+        grounding_context_plugin=_build_grounding_context_plugin(settings),
     )
     whatsapp_runtime = _build_whatsapp_runtime(settings, pipeline=pipeline)
     return AppState(settings=settings, pipeline=pipeline, whatsapp=whatsapp_runtime)
