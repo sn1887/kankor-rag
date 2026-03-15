@@ -131,6 +131,15 @@ def main() -> int:
     base_url = args.base_url.rstrip("/")
     webhook_url = f"{base_url}/v1/whatsapp/webhook"
 
+    if (
+        args.from_wa_id.strip() == "93700000000"
+        or args.phone_number_id.strip() == "test-phone-id"
+    ):
+        print(
+            "[note] Using synthetic WhatsApp ids. "
+            "If your worker outbound backend is Meta, outbound replies can fail for this synthetic recipient."
+        )
+
     challenge = args.challenge.strip() or f"smoke-{int(time.time())}"
     message_id = args.message_id.strip() or f"wamid.smoke.{uuid.uuid4().hex[:12]}"
 

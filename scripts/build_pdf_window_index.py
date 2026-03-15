@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import logging
 import os
 import sys
 import time
@@ -15,6 +16,8 @@ import numpy as np
 from google import genai
 from google.genai import types
 from pypdf import PdfReader, PdfWriter
+
+logging.getLogger("pypdf").setLevel(logging.ERROR)
 
 try:
     from pdf_ingest_text import clean_text
@@ -224,6 +227,29 @@ def parse_args() -> argparse.Namespace:
         help="Fail immediately if any PDF fails to process.",
     )
     parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from an existing checkpoint in --output-dir (requires index.faiss and metadata.jsonl).",
+    )
+    parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=25,
+        help="Persist index/window manifest every N successfully embedded windows. Use 0 to disable mid-run checkpoints.",
+    )
+    parser.add_argument(
+        "--request-timeout-ms",
+        type=int,
+        default=120000,
+        help="Per embedding API request timeout in milliseconds.",
+    )
+    parser.add_argument(
+        "--retry-attempts",
+        type=int,
+        default=5,
+        help="HTTP retry attempts for API calls (including first attempt).",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Plan only (no embedding calls, no index artifacts).",
@@ -237,6 +263,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def _build_client(args: argparse.Namespace):
+    http_options = types.HttpOptions(
+        timeout=int(args.request_timeout_ms),
+        retryOptions=types.HttpRetryOptions(attempts=int(args.retry_attempts)),
+    )
+
     if args.vertexai:
         if not args.vertex_project:
             raise SystemExit("--vertex-project is required when --vertexai is enabled.")
@@ -244,12 +275,13 @@ def _build_client(args: argparse.Namespace):
             vertexai=True,
             project=args.vertex_project,
             location=args.vertex_location,
+            http_options=http_options,
         )
 
     api_key = (args.api_key or os.getenv("GEMINI_API_KEY") or os.getenv("RAG_GEMINI_API_KEY") or "").strip()
     if not api_key:
         raise SystemExit("Missing Gemini API key. Set --api-key or GEMINI_API_KEY/RAG_GEMINI_API_KEY.")
-    return genai.Client(api_key=api_key)
+    return genai.Client(api_key=api_key, http_options=http_options)
 
 
 def infer_metadata(pdf_path: Path, *, corpus_version: str) -> tuple[str, dict[str, Any]]:
@@ -477,18 +509,120 @@ def _jsonl_write(path: Path, rows: list[dict[str, Any]]) -> None:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def _count_jsonl_lines(path: Path) -> int:
+    if not path.exists():
+        return 0
+    count = 0
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                count += 1
+    return count
+
+
+def _truncate_jsonl_lines(path: Path, *, keep_lines: int) -> None:
+    keep = max(0, int(keep_lines))
+    if not path.exists():
+        return
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    kept = 0
+    with path.open("r", encoding="utf-8") as source, tmp_path.open("w", encoding="utf-8") as target:
+        for line in source:
+            if not line.strip():
+                continue
+            if kept >= keep:
+                break
+            target.write(line)
+            kept += 1
+    tmp_path.replace(path)
+
+
+def _load_completed_document_ids(path: Path) -> list[str]:
+    completed: list[str] = []
+    if not path.exists():
+        return completed
+    with path.open("r", encoding="utf-8") as handle:
+        for raw in handle:
+            line = raw.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            doc_id = str(row.get("id", "")).strip()
+            if doc_id:
+                completed.append(doc_id)
+    return completed
+
+
+def _load_jsonl_rows(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if not path.exists():
+        return rows
+    with path.open("r", encoding="utf-8") as handle:
+        for raw in handle:
+            line = raw.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+    return rows
+
+
+def _window_rows_from_metadata(path: Path, *, max_rows: int | None = None) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if not path.exists():
+        return rows
+    limit = None if max_rows is None else max(0, int(max_rows))
+    with path.open("r", encoding="utf-8") as handle:
+        for raw in handle:
+            if limit is not None and len(rows) >= limit:
+                break
+            line = raw.strip()
+            if not line:
+                continue
+            doc_row = json.loads(line)
+            metadata = doc_row.get("metadata") or {}
+            source_id = str(metadata.get("source_id", "unknown"))
+            chunk_index_raw = metadata.get("chunk_index")
+            try:
+                chunk_index = int(chunk_index_raw)
+            except (TypeError, ValueError):
+                chunk_index = -1
+            window_id = source_id if chunk_index < 0 else f"{source_id}:w{chunk_index + 1:03d}"
+            rows.append(
+                {
+                    "window_id": window_id,
+                    "source_id": source_id,
+                    "pdf_path": str(metadata.get("source_pdf_path", "")),
+                    "start_page": metadata.get("start_page"),
+                    "end_page": metadata.get("end_page"),
+                    "page_range": metadata.get("page_range"),
+                    "pdf_bytes": None,
+                    "document_id": doc_row.get("id"),
+                }
+            )
+    return rows
+
+
 def main() -> None:
     args = parse_args()
     if args.window_pages <= 0 or args.window_pages > 6:
         raise SystemExit("--window-pages must be between 1 and 6.")
     if args.skip_first_pages < 0:
         raise SystemExit("--skip-first-pages must be >= 0.")
+    if args.checkpoint_every < 0:
+        raise SystemExit("--checkpoint-every must be >= 0.")
+    if args.request_timeout_ms <= 0:
+        raise SystemExit("--request-timeout-ms must be > 0.")
+    if args.retry_attempts <= 0:
+        raise SystemExit("--retry-attempts must be > 0.")
     task_type_raw = (args.document_task_type or "").strip()
     document_task_type = None if task_type_raw.lower() in {"", "none"} else task_type_raw
 
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    index_path = output_dir / "index.faiss"
+    metadata_path = output_dir / args.metadata_filename
+    window_manifest_path = output_dir / "window_manifest.jsonl"
 
     pdf_paths = _discover_pdf_paths(
         input_dir=input_dir,
@@ -543,18 +677,101 @@ def main() -> None:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         return
 
-    client = _build_client(args)
-    index_path = output_dir / "index.faiss"
-    metadata_path = output_dir / args.metadata_filename
-    window_manifest_path = output_dir / "window_manifest.jsonl"
+    completed_document_ids: set[str] = set()
+    resumed_windows = 0
     window_rows: list[dict[str, Any]] = []
+    if args.resume:
+        if not index_path.exists():
+            raise SystemExit(
+                f"Cannot resume: missing {index_path}. "
+                "Partial metadata alone is not enough because vectors are only checkpointed to index.faiss."
+            )
+        if not metadata_path.exists():
+            raise SystemExit(f"Cannot resume: missing {metadata_path}.")
+        try:
+            import faiss
+        except Exception as exc:  # pragma: no cover - import errors are environment-specific
+            raise SystemExit(f"Cannot resume without faiss: {exc}") from exc
 
+        index = faiss.read_index(str(index_path))
+        resumed_windows = int(getattr(index, "ntotal", 0))
+        if resumed_windows <= 0:
+            raise SystemExit(
+                "Cannot resume: index checkpoint has zero vectors. "
+                "Rerun without --resume to start from scratch."
+            )
+
+        metadata_lines = _count_jsonl_lines(metadata_path)
+        if metadata_lines < resumed_windows:
+            raise SystemExit(
+                f"Cannot resume safely: metadata has {metadata_lines} rows but index has {resumed_windows} vectors."
+            )
+        if metadata_lines > resumed_windows:
+            print(
+                f"Resume sync: truncating {metadata_path} from {metadata_lines} to {resumed_windows} rows "
+                "to match saved index checkpoint."
+            )
+            _truncate_jsonl_lines(metadata_path, keep_lines=resumed_windows)
+
+        loaded_ids = _load_completed_document_ids(metadata_path)
+        if len(loaded_ids) != resumed_windows:
+            raise SystemExit(
+                f"Cannot resume safely: metadata rows ({len(loaded_ids)}) do not match index vectors ({resumed_windows})."
+            )
+        completed_document_ids = set(loaded_ids)
+        if len(completed_document_ids) != resumed_windows:
+            raise SystemExit(
+                "Cannot resume safely: duplicate document ids detected in metadata. "
+                "Rerun without --resume to rebuild clean artifacts."
+            )
+
+        if window_manifest_path.exists():
+            manifest_lines = _count_jsonl_lines(window_manifest_path)
+            if manifest_lines > resumed_windows:
+                print(
+                    f"Resume sync: truncating {window_manifest_path} from {manifest_lines} to {resumed_windows} rows "
+                    "to match saved index checkpoint."
+                )
+                _truncate_jsonl_lines(window_manifest_path, keep_lines=resumed_windows)
+            manifest_lines = _count_jsonl_lines(window_manifest_path)
+            if manifest_lines < resumed_windows:
+                print(
+                    f"Resume sync: rebuilding {window_manifest_path} from metadata "
+                    f"because it has {manifest_lines} rows but checkpoint has {resumed_windows} windows."
+                )
+                window_rows = _window_rows_from_metadata(metadata_path, max_rows=resumed_windows)
+                _jsonl_write(window_manifest_path, window_rows)
+            else:
+                window_rows = _load_jsonl_rows(window_manifest_path)
+        else:
+            print(
+                f"Resume sync: reconstructing missing {window_manifest_path} "
+                f"from metadata checkpoint ({resumed_windows} windows)."
+            )
+            window_rows = _window_rows_from_metadata(metadata_path, max_rows=resumed_windows)
+            _jsonl_write(window_manifest_path, window_rows)
+        print("Resume checkpoint:")
+        print(f"  completed windows    : {resumed_windows}")
+        print(f"  remaining windows    : {max(0, stats['windows_total'] - resumed_windows)}")
+    else:
+        if index_path.exists() or metadata_path.exists() or window_manifest_path.exists():
+            print("Fresh run: existing index artifacts in output dir will be replaced.")
+
+    client = _build_client(args)
     embedded_windows = 0
     failed_windows = 0
     failed_pdfs: list[str] = []
 
     progress = ProgressBar(label="Embedding windows", total=stats["windows_total"])
-    with StreamingFaissArtifactWriter(index_path=index_path, metadata_path=metadata_path) as writer:
+    if resumed_windows > 0:
+        progress.update(resumed_windows, suffix="resumed checkpoint")
+
+    with StreamingFaissArtifactWriter(
+        index_path=index_path,
+        metadata_path=metadata_path,
+        append=resumed_windows > 0,
+        load_existing_index=resumed_windows > 0,
+    ) as writer:
         for plan in plans:
             try:
                 reader = PdfReader(str(plan.pdf_path))
@@ -567,6 +784,16 @@ def main() -> None:
             for window_index in range(1, plan.window_total + 1):
                 start_page = min(plan.total_pages, args.skip_first_pages + (window_index - 1) * args.window_pages + 1)
                 end_page = min(plan.total_pages, start_page + args.window_pages - 1)
+                expected_document_id = stable_hash(
+                    {
+                        "source_id": plan.source_id,
+                        "start_page": start_page,
+                        "end_page": end_page,
+                        "window_index": window_index,
+                    }
+                )
+                if expected_document_id in completed_document_ids:
+                    continue
 
                 try:
                     artifact = _build_window_artifact(
@@ -587,6 +814,7 @@ def main() -> None:
                         document_task_type=document_task_type,
                     )
                     writer.add_batch(embeddings=vector, documents=[artifact.document])
+                    completed_document_ids.add(artifact.document.id)
                     embedded_windows += 1
                     window_rows.append(
                         {
@@ -600,14 +828,17 @@ def main() -> None:
                             "document_id": artifact.document.id,
                         }
                     )
+                    if args.checkpoint_every > 0 and (embedded_windows % args.checkpoint_every) == 0:
+                        writer.save_index()
+                        _jsonl_write(window_manifest_path, window_rows)
                     progress.update(
-                        embedded_windows + failed_windows,
+                        len(completed_document_ids) + failed_windows,
                         suffix=f"{plan.source_id} p.{start_page}-{end_page}",
                     )
                 except Exception as exc:
                     failed_windows += 1
                     progress.update(
-                        embedded_windows + failed_windows,
+                        len(completed_document_ids) + failed_windows,
                         suffix=f"FAILED {plan.source_id} p.{start_page}-{end_page}",
                     )
                     if args.strict:
@@ -615,15 +846,16 @@ def main() -> None:
                     continue
 
         progress.close()
-        if embedded_windows <= 0:
+        if writer.vectors <= 0:
             raise SystemExit("No windows were embedded successfully; index not created.")
         writer.save_index()
 
     _jsonl_write(window_manifest_path, window_rows)
+    total_embedded = len(completed_document_ids)
 
     manifest = {
-        "documents": embedded_windows,
-        "chunks": embedded_windows,
+        "documents": total_embedded,
+        "chunks": total_embedded,
         "embedding_backend": args.embedding_backend_key,
         "embedding_model_id": args.embedding_model,
         "embedding_task_type": document_task_type,
@@ -637,7 +869,9 @@ def main() -> None:
         "pdf_failed": stats["pdf_failed"] + len(failed_pdfs),
         "pages_total": stats["pages_total"],
         "windows_total": stats["windows_total"],
-        "windows_embedded": embedded_windows,
+        "windows_embedded": total_embedded,
+        "windows_embedded_this_run": embedded_windows,
+        "windows_resumed": resumed_windows,
         "windows_failed": failed_windows,
         "window_pages": args.window_pages,
         "skip_first_pages": args.skip_first_pages,
@@ -667,7 +901,9 @@ def main() -> None:
     print(f"  index.faiss         : {index_path}")
     print(f"  metadata            : {metadata_path}")
     print(f"  window manifest     : {window_manifest_path}")
-    print(f"  windows embedded    : {embedded_windows}")
+    print(f"  windows embedded    : {total_embedded}")
+    print(f"  windows resumed     : {resumed_windows}")
+    print(f"  windows added       : {embedded_windows}")
     print(f"  windows failed      : {failed_windows}")
     print(f"  embedding dimension : {manifest['embedding_dimension']}")
     print(f"  manifest            : {output_dir / 'manifest.json'}")
