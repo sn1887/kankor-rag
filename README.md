@@ -330,6 +330,7 @@ Key environment variables:
 - `RAG_EMBEDDING_BACKEND`: `hash`, `e5`, `openai`, `gemini`, `deepseek`, or `module.path:factory`
 - `RAG_CONTEXT_MODE`: `text` (default) or `pdf_windows` for attachment-based grounding
 - `RAG_PDF_WINDOW_MAX_ATTACHMENTS`: max retrieved PDF windows attached per request in `pdf_windows` mode
+- `RAG_PDF_WINDOW_MAX_PAGES_PER_ATTACHMENT`: safety cap on pages extracted per attached PDF window (useful when routing via TOC spans)
 - `RAG_MODEL_ID`: Hugging Face model id for local transformers generation
 - `RAG_EMBEDDING_MODEL_ID`: local E5 embedding model id
 - `RAG_OPENAI_MODEL_ID`: OpenAI model id for chat generation
