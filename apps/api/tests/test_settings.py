@@ -45,6 +45,23 @@ def test_active_llm_model_id_for_deepseek(monkeypatch) -> None:
     assert settings.active_llm_model_id == "deepseek-reasoner"
 
 
+def test_active_llm_model_id_for_gemini_native(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_LLM_BACKEND", "gemini_native")
+    monkeypatch.setenv("RAG_GEMINI_MODEL_ID", "gemini-2.5-flash")
+    settings = Settings()
+    assert settings.active_llm_model_id == "gemini-2.5-flash"
+
+
+def test_gemini_native_retry_settings_are_loaded(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_GEMINI_NATIVE_RETRY_ATTEMPTS", "3")
+    monkeypatch.setenv("RAG_GEMINI_NATIVE_RETRY_DELAY_SECONDS", "1.75")
+    monkeypatch.setenv("RAG_GEMINI_FALLBACK_MODEL_ID", "gemini-2.0-flash")
+    settings = Settings()
+    assert settings.rag_gemini_native_retry_attempts == 3
+    assert settings.rag_gemini_native_retry_delay_seconds == 1.75
+    assert settings.rag_gemini_fallback_model_id == "gemini-2.0-flash"
+
+
 def test_embedding_dimensions_accept_empty_env_as_none(monkeypatch) -> None:
     monkeypatch.setenv("RAG_GEMINI_EMBEDDING_DIMENSIONS", "")
     monkeypatch.setenv("RAG_DEEPSEEK_EMBEDDING_DIMENSIONS", "")
@@ -53,3 +70,30 @@ def test_embedding_dimensions_accept_empty_env_as_none(monkeypatch) -> None:
     assert settings.rag_gemini_embedding_dimensions is None
     assert settings.rag_deepseek_embedding_dimensions is None
     assert settings.rag_openai_embedding_dimensions is None
+
+
+def test_resolved_whatsapp_tokens_strip_whitespace(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_WHATSAPP_VERIFY_TOKEN", "  verify-token ")
+    monkeypatch.setenv("RAG_WHATSAPP_ACCESS_TOKEN", "  access-token ")
+    monkeypatch.setenv("RAG_WHATSAPP_PHONE_NUMBER_ID", " 12345 ")
+    settings = Settings()
+    assert settings.resolved_whatsapp_verify_token == "verify-token"
+    assert settings.resolved_whatsapp_access_token == "access-token"
+    assert settings.resolved_whatsapp_phone_number_id == "12345"
+
+
+def test_resolved_whatsapp_redis_url_falls_back_to_redis_url_env(monkeypatch) -> None:
+    monkeypatch.delenv("RAG_WHATSAPP_REDIS_URL", raising=False)
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6379/1")
+    settings = Settings()
+    assert settings.resolved_whatsapp_redis_url == "redis://127.0.0.1:6379/1"
+
+
+def test_adaptive_rag_policy_settings_are_loaded(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_DIRECT_SOLVER_ENABLED", "true")
+    monkeypatch.setenv("RAG_DIRECT_SOLVER_MIN_SIGNAL_SCORE", "4")
+    monkeypatch.setenv("RAG_TOPIC_LOCATOR_FRONT_MATTER_MAX_PAGE", "7")
+    settings = Settings()
+    assert settings.rag_direct_solver_enabled is True
+    assert settings.rag_direct_solver_min_signal_score == 4
+    assert settings.rag_topic_locator_front_matter_max_page == 7

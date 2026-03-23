@@ -8,7 +8,7 @@ The repository is structured for local development and deployment as a Hugging F
 - OpenWebUI as the default interface (connected through OpenAI-compatible API routes)
 - FastAPI backend (`apps/api`) with both custom SSE (`/v1/chat/stream`) and OpenAI-compatible (`/v1/chat/completions`, `/v1/models`) endpoints
 - Optional Next.js frontend (`apps/web`) for custom source-panel UX
-- Reusable core package (`packages/rag_core`) with pluggable embeddings + LLM providers (`hash`, `e5`, `openai`, `gemini`, `deepseek`, `transformers`)
+- Reusable core package (`packages/rag_core`) with pluggable embeddings + LLM providers (`hash`, `e5`, `openai`, `gemini`, `gemini_native`, `deepseek`, `transformers`)
 - Offline data pipeline (`scripts/`) for PDF ingestion, corpus audit, and FAISS index build
 - Docker startup (`docker/`) with OpenWebUI-first API mode and optional Next.js mode
 
@@ -30,14 +30,20 @@ cd ../..
 Run OpenWebUI + API together (recommended):
 
 ```bash
-cd docker
-cp .env.example .env
-RAG_OPENAI_COMPAT_API_KEY=changeme docker compose -f docker-compose.openwebui.yml up --build
+cp docker/.env.example docker/.env
+./scripts/openwebui_local_up.sh docker/.env --build -d
+```
+
+Gemini preset:
+
+```bash
+./scripts/openwebui_local_up.sh docker/.env.gemini --build -d
 ```
 
 Then open `http://127.0.0.1:3000`.
 
 The API is exposed at `http://127.0.0.1:8000/v1`, and OpenWebUI uses the OpenAI-compatible endpoints automatically.
+The helper script sources the selected env file and runs Compose with `--force-recreate` so env-file values win over stale shell exports.
 
 ## Quick Demo (Local)
 
@@ -147,6 +153,131 @@ export DEEPSEEK_API_KEY=<your-key>
 uvicorn kankor_api.main:app --host 127.0.0.1 --port 8000
 ```
 
+## Gemini PDF Embedding 2 Experiment (Single Book)
+
+Use this to test retrieval/generation directly from PDF windows (no OCR/text extraction step).
+
+Target example: `data/raw_pdfs/grade_10/G10-Dr-physic.pdf`
+
+Prepare manifests/query suite only (offline):
+
+```bash
+python scripts/gemini_pdf_retrieval_eval.py \
+  --pdf data/raw_pdfs/grade_10/G10-Dr-physic.pdf \
+  --output-dir data/experiments/g10_physics_gemini_pdf_eval \
+  --dry-run
+```
+
+Run full embedding + retrieval + answer generation:
+
+```bash
+set -a
+source docker/.env.gemini
+set +a
+python -u scripts/gemini_pdf_retrieval_eval.py \
+  --pdf data/raw_pdfs/grade_10/G10-Dr-physic.pdf \
+  --output-dir data/experiments/g10_physics_gemini_pdf_eval \
+  --window-pages 2 \
+  --top-k 5 \
+  --answer-top-k 1 \
+  --response-language fa
+```
+
+Notes:
+- Outputs include `window_manifest.jsonl`, `query_suite.jsonl`, `retrieval_results.jsonl`, `generation_results.jsonl`, and `summary.json`.
+- If your Gemini endpoint rejects multimodal embeddings, retry in Vertex mode:
+  `--vertexai --vertex-project <PROJECT_ID> --vertex-location us-central1`
+- Cost control: `window-pages=2` and `answer-top-k=1` keep generation context small.
+
+## Offline Production Readiness Scoring
+
+Score a completed experiment run without paid API calls:
+
+```bash
+python scripts/rag_eval_report.py \
+  --experiment-dir data/experiments/g10_physics_gemini_pdf_eval
+```
+
+Optional relevance scoring (recommended):
+
+1. Copy `docs/RAG_QUERY_EXPECTATIONS.example.jsonl` and map each `query_id` to expected page ranges.
+2. Run:
+
+```bash
+python scripts/rag_eval_report.py \
+  --experiment-dir data/experiments/g10_physics_gemini_pdf_eval \
+  --expectations-file docs/RAG_QUERY_EXPECTATIONS.example.jsonl
+```
+
+Thresholds are loaded from `docs/RAG_EVAL_THRESHOLDS.json` by default and the report is written to
+`evaluation_report.json` in the experiment directory.
+Use `docs/PRODUCTION_READINESS_CHECKLIST.md` as the rollout gate checklist.
+Note: `query_id` in expectations must exactly match `query_suite.jsonl` / `retrieval_results.jsonl`.
+
+## Build Full PDF Window Index
+
+Build a production-shaped FAISS index directly from all textbook PDFs under `data/raw_pdfs`:
+
+```bash
+set -a
+source docker/.env.gemini
+set +a
+python -u scripts/build_pdf_window_index.py \
+  --input-dir data/raw_pdfs \
+  --grades grade_10 grade_11 grade_12 \
+  --output-dir data/index/kankor_gemini_pdf_window2 \
+  --window-pages 2 \
+  --embedding-model gemini-embedding-2-preview \
+  --checkpoint-every 25 \
+  --request-timeout-ms 120000 \
+  --retry-attempts 5 \
+  --corpus-version kankor-corpus@2026.03-gemini-pdf-window2
+```
+
+Resume a previously interrupted run from saved `index.faiss` + `metadata.jsonl`:
+
+```bash
+python -u scripts/build_pdf_window_index.py \
+  --input-dir data/raw_pdfs \
+  --grades grade_10 grade_11 grade_12 \
+  --output-dir data/index/kankor_gemini_pdf_window2 \
+  --window-pages 2 \
+  --embedding-model gemini-embedding-2-preview \
+  --checkpoint-every 25 \
+  --request-timeout-ms 120000 \
+  --retry-attempts 5 \
+  --resume \
+  --corpus-version kankor-corpus@2026.03-gemini-pdf-window2
+```
+
+Note: `--resume` requires a saved `index.faiss` checkpoint. If only `metadata.jsonl` exists, vectors were not
+persisted yet and the run must restart from scratch.
+
+Dry-run planning only (no API cost):
+
+```bash
+python scripts/build_pdf_window_index.py \
+  --input-dir data/raw_pdfs \
+  --grades grade_10 grade_11 grade_12 \
+  --output-dir data/experiments/full_pdf_build_plan \
+  --window-pages 2 \
+  --dry-run
+```
+
+Output artifacts are API-compatible with current runtime wiring:
+- `index.faiss`
+- `metadata.jsonl`
+- `manifest.json`
+- `window_manifest.jsonl`
+
+Optional TOC manifest (recommended for chapter/title locator quality):
+
+```bash
+python scripts/build_toc_manifest.py \
+  --metadata-path data/index/kankor_gemini_pdf_window2/metadata.jsonl \
+  --output-path data/index/kankor_gemini_pdf_window2/toc_manifest.jsonl
+```
+
 ## Corpus Pipeline
 
 ### 1) Extract PDFs to JSONL
@@ -193,9 +324,13 @@ python scripts/build_index.py \
 Key environment variables:
 
 - `RAG_INDEX_PATH` and `RAG_DOCSTORE_PATH`: FAISS and metadata paths
+- `RAG_TOC_MANIFEST_PATH`: optional TOC manifest used first for chapter/title topic-locator queries
 - `RAG_VECTOR_STORE_BACKEND`: vector backend key (`faiss`) or `module.path:factory`
-- `RAG_LLM_BACKEND`: `transformers`, `openai`, `gemini`, `deepseek`, or `module.path:factory`
+- `RAG_LLM_BACKEND`: `transformers`, `openai`, `gemini`, `gemini_native`, `deepseek`, or `module.path:factory`
 - `RAG_EMBEDDING_BACKEND`: `hash`, `e5`, `openai`, `gemini`, `deepseek`, or `module.path:factory`
+- `RAG_CONTEXT_MODE`: `text` (default) or `pdf_windows` for attachment-based grounding
+- `RAG_PDF_WINDOW_MAX_ATTACHMENTS`: max retrieved PDF windows attached per request in `pdf_windows` mode
+- `RAG_PDF_WINDOW_MAX_PAGES_PER_ATTACHMENT`: safety cap on pages extracted per attached PDF window (useful when routing via TOC spans)
 - `RAG_MODEL_ID`: Hugging Face model id for local transformers generation
 - `RAG_EMBEDDING_MODEL_ID`: local E5 embedding model id
 - `RAG_OPENAI_MODEL_ID`: OpenAI model id for chat generation
@@ -208,7 +343,11 @@ Key environment variables:
 - `RAG_GEMINI_API_KEY`: Gemini key override (falls back to `GEMINI_API_KEY`)
 - `RAG_GEMINI_BASE_URL`: Gemini OpenAI-compatible base URL (default `https://generativelanguage.googleapis.com/v1beta/openai`)
 - `RAG_GEMINI_TIMEOUT_SECONDS`: timeout for Gemini requests
+- `RAG_GEMINI_FALLBACK_MODEL_ID`: optional backup model for `gemini_native` when primary model is transiently unavailable
+- `RAG_GEMINI_NATIVE_RETRY_ATTEMPTS`: retry attempts per Gemini model for transient overload/rate-limit errors
+- `RAG_GEMINI_NATIVE_RETRY_DELAY_SECONDS`: base delay between Gemini retry attempts (linear backoff)
 - `RAG_GEMINI_EMBEDDING_DIMENSIONS`: optional output dimensions for Gemini embeddings
+- Note: `gemini_native` uses `google-genai` directly and supports binary PDF window attachments.
 - `RAG_DEEPSEEK_MODEL_ID` / `RAG_DEEPSEEK_EMBEDDING_MODEL_ID`: DeepSeek model ids
 - `RAG_DEEPSEEK_API_KEY`: DeepSeek key override (falls back to `DEEPSEEK_API_KEY`)
 - `RAG_DEEPSEEK_BASE_URL`: DeepSeek OpenAI-compatible base URL (default `https://api.deepseek.com/v1`)
@@ -220,15 +359,105 @@ Key environment variables:
 - `RAG_ALLOW_HASH_EMBEDDER_FALLBACK`: `false` by default; set `true` only for explicit degraded-mode tolerance
 - `RAG_MAX_NEW_TOKENS_HARD_LIMIT`: hard upper bound enforced on per-request `max_tokens`
 - `RAG_TEMPERATURE_MIN` / `RAG_TEMPERATURE_MAX`: allowed request temperature range
+- `RAG_DEFAULT_LANGUAGE`: response language policy (`fa` default; use `fa` to keep Dari-first responses)
 - `RAG_UI_INTERFACE`: `openwebui` (default, API-only container) or `nextjs` (runs API + Next.js in one container)
 - `RAG_DEMO_MODE`: set `true` to bypass local model generation
 - `RAG_GENERATION_MODE`: `sample`, `greedy`, or `contrastive`
 - `RAG_CONTRASTIVE_PENALTY_ALPHA`: contrastive decoding parameter
 - `RAG_CONTRASTIVE_TOP_K`: contrastive decoding parameter
 - `BACKEND_API_KEY` (Next.js only): forwards `Authorization: Bearer ...` to backend `/v1/chat/stream`
+- `RAG_WHATSAPP_ENABLED`: enable WhatsApp webhook + worker runtime
+- `RAG_WHATSAPP_VERIFY_TOKEN`: Meta webhook verification token (`GET /v1/whatsapp/webhook`)
+- `RAG_WHATSAPP_WEBHOOK_SECRET`: optional HMAC secret used to validate `X-Hub-Signature-256`
+- `RAG_WHATSAPP_ACCESS_TOKEN`: Meta Graph API token for outbound send + media fetch
+- `RAG_WHATSAPP_PHONE_NUMBER_ID`: WhatsApp business phone number id for outbound messages
+- `RAG_WHATSAPP_GRAPH_API_VERSION`: Graph API version (default `v22.0`)
+- `RAG_WHATSAPP_WORKER_CONCURRENCY`: number of async workers consuming inbound jobs
+- `RAG_WHATSAPP_WORKER_POLL_SECONDS`: queue polling interval for idle workers
+- `RAG_WHATSAPP_HISTORY_TURNS`: per-user chat memory window used for follow-up context
+- `RAG_WHATSAPP_PROCESSED_TTL_SECONDS`: dedupe key TTL (seconds) when using Redis processed store
+- `RAG_WHATSAPP_CONVERSATION_TTL_SECONDS`: conversation history TTL (seconds) when using Redis conversation store
+- `RAG_WHATSAPP_MAX_REPLY_CHARS`: hard split size for outbound WhatsApp text chunks
+- `RAG_WHATSAPP_QUEUE_BACKEND`: queue backend (`memory`, `redis`, or `module.path:factory`)
+- `RAG_WHATSAPP_PROCESSED_STORE_BACKEND`: processed-message store backend (`memory`, `redis`, or `module.path:factory`)
+- `RAG_WHATSAPP_CONVERSATION_STORE_BACKEND`: conversation store backend (`memory`, `redis`, or `module.path:factory`)
+- `RAG_WHATSAPP_OUTBOUND_BACKEND`: outbound backend (`meta`, `log`, or `module.path:factory`)
+- `RAG_WHATSAPP_MEDIA_BACKEND`: media backend (`meta`, `noop`, or `module.path:factory`)
+- `RAG_WHATSAPP_OCR_BACKEND`: OCR backend (`noop`, `tesseract`, or `module.path:factory`)
+- `RAG_WHATSAPP_REDIS_URL`: Redis URL for built-in Redis queue/stores (falls back to `REDIS_URL`)
+- `RAG_WHATSAPP_REDIS_KEY_PREFIX`: key prefix for Redis WhatsApp data (`kankor:whatsapp` by default)
 
 Contrastive decoding requires remote generation code from:
 `transformers-community/contrastive-search`
+
+## WhatsApp Channel
+
+The API now includes a modular WhatsApp channel:
+
+- `GET /v1/whatsapp/webhook`: Meta webhook verification challenge
+- `POST /v1/whatsapp/webhook`: receives inbound WhatsApp events, verifies signature, de-duplicates by message id, and enqueues async jobs
+
+Implementation notes:
+
+- RAG inference reuses the same `RAGPipeline` used by web/OpenAI-compatible routes
+- message processing runs in background worker(s), so webhook responses are fast ACKs
+- text and image questions are supported; image messages run through pluggable media + OCR providers
+- all WhatsApp dependencies are interface-based for plug-and-play replacement
+
+## WhatsApp Smoke Test
+
+One-command local WhatsApp boot profile (API + Redis):
+
+```bash
+./scripts/whatsapp_local_up.sh
+```
+
+The helper script sources the selected env file and runs Compose with `--force-recreate` so env-file values win over stale shell exports.
+
+Rebuild only when needed:
+
+```bash
+./scripts/whatsapp_local_up.sh --build
+```
+
+This starts:
+- WhatsApp API at `http://127.0.0.1:8100`
+- Redis at `redis://127.0.0.1:6379/0`
+
+Run detached:
+
+```bash
+./scripts/whatsapp_local_up.sh -d
+```
+
+Use a custom env file:
+
+```bash
+./scripts/whatsapp_local_up.sh /path/to/.env.whatsapp
+```
+
+Use the helper script to test both verification and ingestion against a running API:
+
+```bash
+cp .env.whatsapp.example .env
+
+python scripts/whatsapp_webhook_smoke_test.py \
+  --base-url http://127.0.0.1:8100 \
+  --verify-token <RAG_WHATSAPP_VERIFY_TOKEN> \
+  --webhook-secret <RAG_WHATSAPP_WEBHOOK_SECRET>
+```
+
+For local smoke runs without Meta credentials, set:
+`RAG_WHATSAPP_OUTBOUND_BACKEND=log` and `RAG_WHATSAPP_MEDIA_BACKEND=noop`.
+
+For Redis-backed runtime:
+
+```bash
+export RAG_WHATSAPP_QUEUE_BACKEND=redis
+export RAG_WHATSAPP_PROCESSED_STORE_BACKEND=redis
+export RAG_WHATSAPP_CONVERSATION_STORE_BACKEND=redis
+export RAG_WHATSAPP_REDIS_URL=redis://127.0.0.1:6379/0
+```
 
 ## Hugging Face Space Deployment
 

@@ -12,7 +12,8 @@ class Settings(BaseSettings):
     rag_llm_backend: str = Field(default='transformers', alias='RAG_LLM_BACKEND')
     rag_model_id: str = Field(default='Qwen/Qwen3.5-2B', alias='RAG_MODEL_ID')
     rag_openai_model_id: str = Field(default='gpt-4o-mini', alias='RAG_OPENAI_MODEL_ID')
-    rag_gemini_model_id: str = Field(default='gemini-2.0-flash', alias='RAG_GEMINI_MODEL_ID')
+    rag_gemini_model_id: str = Field(default='gemini-2.5-flash', alias='RAG_GEMINI_MODEL_ID')
+    rag_gemini_fallback_model_id: str | None = Field(default=None, alias='RAG_GEMINI_FALLBACK_MODEL_ID')
     rag_deepseek_model_id: str = Field(default='deepseek-chat', alias='RAG_DEEPSEEK_MODEL_ID')
     rag_embedding_model_id: str = Field(default='intfloat/multilingual-e5-small', alias='RAG_EMBEDDING_MODEL_ID')
     rag_openai_embedding_model_id: str = Field(default='text-embedding-3-small', alias='RAG_OPENAI_EMBEDDING_MODEL_ID')
@@ -27,6 +28,8 @@ class Settings(BaseSettings):
     rag_gemini_api_key: str | None = Field(default=None, alias='RAG_GEMINI_API_KEY')
     rag_gemini_base_url: str = Field(default='https://generativelanguage.googleapis.com/v1beta/openai', alias='RAG_GEMINI_BASE_URL')
     rag_gemini_timeout_seconds: float = Field(default=120.0, alias='RAG_GEMINI_TIMEOUT_SECONDS')
+    rag_gemini_native_retry_attempts: int = Field(default=2, alias='RAG_GEMINI_NATIVE_RETRY_ATTEMPTS')
+    rag_gemini_native_retry_delay_seconds: float = Field(default=1.0, alias='RAG_GEMINI_NATIVE_RETRY_DELAY_SECONDS')
     rag_gemini_embedding_dimensions: int | None = Field(default=None, alias='RAG_GEMINI_EMBEDDING_DIMENSIONS')
     rag_deepseek_api_key: str | None = Field(default=None, alias='RAG_DEEPSEEK_API_KEY')
     rag_deepseek_base_url: str = Field(default='https://api.deepseek.com/v1', alias='RAG_DEEPSEEK_BASE_URL')
@@ -36,9 +39,43 @@ class Settings(BaseSettings):
     rag_chat_api_key: str | None = Field(default=None, alias='RAG_CHAT_API_KEY')
     rag_index_path: str = Field(default='data/sample_index/index.faiss', alias='RAG_INDEX_PATH')
     rag_docstore_path: str = Field(default='data/sample_index/metadata.jsonl', alias='RAG_DOCSTORE_PATH')
+    rag_toc_manifest_path: str | None = Field(default=None, alias='RAG_TOC_MANIFEST_PATH')
     rag_vector_store_backend: str = Field(default='faiss', alias='RAG_VECTOR_STORE_BACKEND')
+    rag_context_mode: str = Field(default='text', alias='RAG_CONTEXT_MODE')
+    rag_pdf_window_max_attachments: int = Field(default=3, alias='RAG_PDF_WINDOW_MAX_ATTACHMENTS')
+    rag_pdf_window_max_pages_per_attachment: int = Field(
+        default=4,
+        alias='RAG_PDF_WINDOW_MAX_PAGES_PER_ATTACHMENT',
+    )
     rag_top_k: int = Field(default=5, alias='RAG_TOP_K')
     rag_min_score: float = Field(default=0.15, alias='RAG_MIN_SCORE')
+    rag_local_expansion_neighbors: int = Field(default=1, alias='RAG_LOCAL_EXPANSION_NEIGHBORS')
+    rag_retrieval_confidence_top_score: float = Field(default=0.27, alias='RAG_RETRIEVAL_CONFIDENCE_TOP_SCORE')
+    rag_retrieval_confidence_min_hits: int = Field(default=1, alias='RAG_RETRIEVAL_CONFIDENCE_MIN_HITS')
+    rag_intent_router_max_decomposition_queries: int = Field(
+        default=4,
+        alias='RAG_INTENT_ROUTER_MAX_DECOMPOSITION_QUERIES',
+    )
+    rag_direct_solver_enabled: bool = Field(default=True, alias='RAG_DIRECT_SOLVER_ENABLED')
+    rag_direct_solver_min_signal_score: int = Field(default=3, alias='RAG_DIRECT_SOLVER_MIN_SIGNAL_SCORE')
+    rag_direct_solver_min_numeric_tokens: int = Field(default=2, alias='RAG_DIRECT_SOLVER_MIN_NUMERIC_TOKENS')
+    rag_direct_solver_max_question_length: int = Field(default=2400, alias='RAG_DIRECT_SOLVER_MAX_QUESTION_LENGTH')
+    rag_topic_locator_front_matter_suppression_enabled: bool = Field(
+        default=True,
+        alias='RAG_TOPIC_LOCATOR_FRONT_MATTER_SUPPRESSION_ENABLED',
+    )
+    rag_topic_locator_front_matter_max_page: int = Field(
+        default=6,
+        alias='RAG_TOPIC_LOCATOR_FRONT_MATTER_MAX_PAGE',
+    )
+    rag_topic_locator_front_matter_allow_when_empty: bool = Field(
+        default=False,
+        alias='RAG_TOPIC_LOCATOR_FRONT_MATTER_ALLOW_WHEN_EMPTY',
+    )
+    rag_topic_locator_front_matter_suppress_page_unknown: bool = Field(
+        default=False,
+        alias='RAG_TOPIC_LOCATOR_FRONT_MATTER_SUPPRESS_PAGE_UNKNOWN',
+    )
     rag_max_new_tokens: int = Field(default=256, alias='RAG_MAX_NEW_TOKENS')
     rag_max_new_tokens_hard_limit: int = Field(default=1024, alias='RAG_MAX_NEW_TOKENS_HARD_LIMIT')
     rag_temperature: float = Field(default=0.2, alias='RAG_TEMPERATURE')
@@ -47,7 +84,7 @@ class Settings(BaseSettings):
     rag_generation_mode: str = Field(default='sample', alias='RAG_GENERATION_MODE')
     rag_contrastive_penalty_alpha: float = Field(default=0.6, alias='RAG_CONTRASTIVE_PENALTY_ALPHA')
     rag_contrastive_top_k: int = Field(default=4, alias='RAG_CONTRASTIVE_TOP_K')
-    rag_default_language: str = Field(default='auto', alias='RAG_DEFAULT_LANGUAGE')
+    rag_default_language: str = Field(default='fa', alias='RAG_DEFAULT_LANGUAGE')
     rag_corpus_version: str = Field(default='kankor-corpus@2026.03-demo', alias='RAG_CORPUS_VERSION')
     rag_source_pdf_url_template: str = Field(
         default=(
@@ -58,6 +95,26 @@ class Settings(BaseSettings):
         alias='RAG_SOURCE_PDF_URL_TEMPLATE',
     )
     rag_demo_mode: bool = Field(default=False, alias='RAG_DEMO_MODE')
+    rag_whatsapp_enabled: bool = Field(default=False, alias='RAG_WHATSAPP_ENABLED')
+    rag_whatsapp_verify_token: str | None = Field(default=None, alias='RAG_WHATSAPP_VERIFY_TOKEN')
+    rag_whatsapp_access_token: str | None = Field(default=None, alias='RAG_WHATSAPP_ACCESS_TOKEN')
+    rag_whatsapp_phone_number_id: str | None = Field(default=None, alias='RAG_WHATSAPP_PHONE_NUMBER_ID')
+    rag_whatsapp_graph_api_version: str = Field(default='v22.0', alias='RAG_WHATSAPP_GRAPH_API_VERSION')
+    rag_whatsapp_webhook_secret: str | None = Field(default=None, alias='RAG_WHATSAPP_WEBHOOK_SECRET')
+    rag_whatsapp_worker_concurrency: int = Field(default=2, alias='RAG_WHATSAPP_WORKER_CONCURRENCY')
+    rag_whatsapp_queue_backend: str = Field(default='memory', alias='RAG_WHATSAPP_QUEUE_BACKEND')
+    rag_whatsapp_processed_store_backend: str = Field(default='memory', alias='RAG_WHATSAPP_PROCESSED_STORE_BACKEND')
+    rag_whatsapp_conversation_store_backend: str = Field(default='memory', alias='RAG_WHATSAPP_CONVERSATION_STORE_BACKEND')
+    rag_whatsapp_outbound_backend: str = Field(default='meta', alias='RAG_WHATSAPP_OUTBOUND_BACKEND')
+    rag_whatsapp_media_backend: str = Field(default='meta', alias='RAG_WHATSAPP_MEDIA_BACKEND')
+    rag_whatsapp_ocr_backend: str = Field(default='noop', alias='RAG_WHATSAPP_OCR_BACKEND')
+    rag_whatsapp_history_turns: int = Field(default=6, alias='RAG_WHATSAPP_HISTORY_TURNS')
+    rag_whatsapp_processed_ttl_seconds: int = Field(default=172800, alias='RAG_WHATSAPP_PROCESSED_TTL_SECONDS')
+    rag_whatsapp_conversation_ttl_seconds: int = Field(default=604800, alias='RAG_WHATSAPP_CONVERSATION_TTL_SECONDS')
+    rag_whatsapp_redis_url: str | None = Field(default=None, alias='RAG_WHATSAPP_REDIS_URL')
+    rag_whatsapp_redis_key_prefix: str = Field(default='kankor:whatsapp', alias='RAG_WHATSAPP_REDIS_KEY_PREFIX')
+    rag_whatsapp_max_reply_chars: int = Field(default=1400, alias='RAG_WHATSAPP_MAX_REPLY_CHARS')
+    rag_whatsapp_worker_poll_seconds: float = Field(default=1.0, alias='RAG_WHATSAPP_WORKER_POLL_SECONDS')
 
     @field_validator(
         'rag_openai_embedding_dimensions',
@@ -104,7 +161,7 @@ class Settings(BaseSettings):
         backend = self.rag_llm_backend.lower().strip()
         if backend == 'openai':
             return self.rag_openai_model_id
-        if backend == 'gemini':
+        if backend in {'gemini', 'gemini_native'}:
             return self.rag_gemini_model_id
         if backend == 'deepseek':
             return self.rag_deepseek_model_id
@@ -122,3 +179,19 @@ class Settings(BaseSettings):
         if backend == 'hash':
             return 'hash'
         return self.rag_embedding_model_id
+
+    @property
+    def resolved_whatsapp_verify_token(self) -> str | None:
+        return self._first_non_empty(self.rag_whatsapp_verify_token)
+
+    @property
+    def resolved_whatsapp_access_token(self) -> str | None:
+        return self._first_non_empty(self.rag_whatsapp_access_token)
+
+    @property
+    def resolved_whatsapp_phone_number_id(self) -> str | None:
+        return self._first_non_empty(self.rag_whatsapp_phone_number_id)
+
+    @property
+    def resolved_whatsapp_redis_url(self) -> str | None:
+        return self._first_non_empty(self.rag_whatsapp_redis_url, os.getenv('REDIS_URL'))

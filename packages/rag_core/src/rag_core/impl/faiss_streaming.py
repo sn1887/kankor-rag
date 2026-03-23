@@ -10,9 +10,18 @@ from rag_core.types import Document
 
 
 class StreamingFaissArtifactWriter:
-    def __init__(self, *, index_path: str | Path, metadata_path: str | Path) -> None:
+    def __init__(
+        self,
+        *,
+        index_path: str | Path,
+        metadata_path: str | Path,
+        append: bool = False,
+        load_existing_index: bool = False,
+    ) -> None:
         self.index_path = Path(index_path)
         self.metadata_path = Path(metadata_path)
+        self.append = bool(append)
+        self.load_existing_index = bool(load_existing_index)
         self._index = None
         self._metadata_handle: TextIO | None = None
         self._json_started = False
@@ -36,9 +45,21 @@ class StreamingFaissArtifactWriter:
         self.close()
 
     def open(self) -> None:
+        if self.append and self.metadata_path.suffix.lower() != ".jsonl":
+            raise ValueError("append mode is only supported for jsonl metadata files.")
+
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
         self.metadata_path.parent.mkdir(parents=True, exist_ok=True)
-        self._metadata_handle = self.metadata_path.open("w", encoding="utf-8")
+
+        if self.load_existing_index and self.index_path.exists():
+            import faiss
+
+            self._index = faiss.read_index(str(self.index_path))
+            self._dimension = int(getattr(self._index, "d", 0))
+            self._vectors = int(getattr(self._index, "ntotal", 0))
+
+        mode = "a" if self.append else "w"
+        self._metadata_handle = self.metadata_path.open(mode, encoding="utf-8")
         if self.metadata_path.suffix.lower() == ".json":
             self._metadata_handle.write('{"documents":[\n')
             self._json_started = True
@@ -109,4 +130,3 @@ class StreamingFaissArtifactWriter:
         import faiss
 
         faiss.write_index(self._index, str(self.index_path))
-

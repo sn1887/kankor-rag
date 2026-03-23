@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from rag_core.impl.llm_openai import OpenAILLMProvider
-from rag_core.types import ChatTurn
+from rag_core.types import ChatAttachment, ChatTurn
 
 
 class _FakeChunk:
@@ -50,3 +52,18 @@ def test_openai_llm_provider_falls_back_to_max_tokens() -> None:
     assert len(calls) == 2
     assert "max_completion_tokens" in calls[0]
     assert "max_tokens" in calls[1]
+
+
+def test_openai_llm_provider_rejects_binary_attachments() -> None:
+    provider = OpenAILLMProvider(model_name="test-model")
+    provider._client = _FakeClient()
+    with pytest.raises(ValueError, match="does not support binary attachments"):
+        list(
+            provider.stream_chat(
+                messages=[ChatTurn(role="user", content="hello")],
+                system_prompt="test",
+                max_new_tokens=32,
+                temperature=0.0,
+                attachments=[ChatAttachment(media_type="application/pdf", data=b"pdf", label="S1")],
+            )
+        )

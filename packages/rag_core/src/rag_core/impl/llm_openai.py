@@ -4,7 +4,7 @@ from collections.abc import Iterator, Sequence
 
 from rag_core.contracts.llm import LLMProvider
 from rag_core.impl.openai_common import build_openai_client
-from rag_core.types import ChatTurn
+from rag_core.types import ChatAttachment, ChatTurn
 
 
 class OpenAILLMProvider(LLMProvider):
@@ -79,7 +79,10 @@ class OpenAILLMProvider(LLMProvider):
         system_prompt: str,
         max_new_tokens: int,
         temperature: float,
+        attachments: Sequence[ChatAttachment] | None = None,
     ) -> Iterator[str]:
+        if attachments:
+            raise ValueError("This LLM backend does not support binary attachments.")
         stream = self._create_stream(
             messages=messages,
             system_prompt=system_prompt,
