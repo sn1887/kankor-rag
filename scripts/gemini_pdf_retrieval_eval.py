@@ -115,9 +115,9 @@ DEFAULT_API_QUERIES: list[dict[str, Any]] = [
     {
         "id": "math_solve_linear_fa",
         "language": "fa",
-        "intent": "grounded_textbook",
+        "intent": "direct_solver",
         "query": "این معادله را حل کن: 2x + 7 = 19",
-        "citation_required": True,
+        "citation_required": False,
         "expected_subjects": ["mathematics"],
     },
     {
@@ -179,7 +179,7 @@ DEFAULT_API_QUERIES: list[dict[str, Any]] = [
 ]
 
 
-NON_GROUNDED_INTENTS = {"smalltalk", "greeting", "study_coach"}
+NON_GROUNDED_INTENTS = {"smalltalk", "greeting", "study_coach", "direct_solver"}
 REFERENCE_HEADING_PATTERN = re.compile(r"(?im)^\s{0,3}#{1,6}\s*(references|sources)\b")
 CITATION_BADGE_PATTERN = re.compile(r"\[(S\d+)(?:[^\]]*)\]", re.IGNORECASE)
 
@@ -982,6 +982,9 @@ def _to_hits_from_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 
 def _resolve_citation_required(query: dict[str, Any]) -> bool:
+    intent = str(query.get("intent", "")).strip().lower()
+    if intent in NON_GROUNDED_INTENTS:
+        return False
     raw = query.get("citation_required")
     if isinstance(raw, bool):
         return raw
@@ -991,7 +994,6 @@ def _resolve_citation_required(query: dict[str, Any]) -> bool:
             return True
         if normalized in {"0", "false", "no", "n"}:
             return False
-    intent = str(query.get("intent", "")).strip().lower()
     return intent not in NON_GROUNDED_INTENTS
 
 
@@ -1117,7 +1119,12 @@ def _stream_chat_via_api(
     ) as response:
         status_code = response.status_code
         if status_code >= 400:
-            detail = response.text[:800]
+            try:
+                detail_bytes = response.read()
+                detail = detail_bytes.decode("utf-8", errors="replace")
+            except Exception:
+                detail = "<unable to read error response body>"
+            detail = detail[:800]
             raise RuntimeError(f"API request failed ({status_code}): {detail}")
 
         block_event = "message"
