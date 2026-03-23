@@ -129,3 +129,16 @@ def test_build_system_prompt_is_stable_for_grounded_requests() -> None:
         intent="grounded_textbook",
     )
     assert prompt_a == prompt_b
+
+
+def test_build_system_prompt_for_direct_solver_skips_citation_contract() -> None:
+    prompt = build_system_prompt(
+        question="Solve for x: 2x + 3 = 11",
+        hits=[],
+        corpus_version="kankor-corpus@2026.03",
+        default_language="fa",
+        intent="direct_solver",
+    )
+    assert "حل‌کننده مستقیم مسائل" in prompt
+    assert "ارجاع [S#]" in prompt
+    assert "References" in prompt

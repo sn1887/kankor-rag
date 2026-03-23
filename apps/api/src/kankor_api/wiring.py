@@ -19,12 +19,13 @@ from rag_core.impl.llm_gemini_native import GeminiNativeLLMProvider
 from rag_core.impl.llm_openai import OpenAILLMProvider
 from rag_core.impl.llm_transformers import TransformersLLMProvider
 from rag_core.impl.vector_faiss import FaissVectorStore
+from rag_core.rag.adaptive_retrieval import TopicLocatorFrontMatterPolicy
 from rag_core.rag.context_plugins import (
     GroundingContextPlugin,
     PdfWindowGroundingContextPlugin,
     TextGroundingContextPlugin,
 )
-from rag_core.rag.intent_router import IntentRouter
+from rag_core.rag.intent_router import DirectSolverPolicy, IntentRouter
 from rag_core.rag.pipeline import RAGPipeline
 from rag_core.rag.toc_locator import TOCIndex
 
@@ -406,6 +407,7 @@ def _build_grounding_context_plugin(settings: Settings) -> GroundingContextPlugi
     if mode == "pdf_windows":
         return PdfWindowGroundingContextPlugin(
             max_attachments=settings.rag_pdf_window_max_attachments,
+            max_pages_per_attachment=settings.rag_pdf_window_max_pages_per_attachment,
         )
     raise ValueError('Unsupported RAG context mode. Use "text" or "pdf_windows".')
 
@@ -537,11 +539,23 @@ def get_app_state() -> AppState:
         min_score=settings.rag_min_score,
         intent_router=IntentRouter(
             max_decomposition_queries=settings.rag_intent_router_max_decomposition_queries,
+            direct_solver_policy=DirectSolverPolicy(
+                enabled=settings.rag_direct_solver_enabled,
+                min_signal_score=settings.rag_direct_solver_min_signal_score,
+                min_numeric_tokens=settings.rag_direct_solver_min_numeric_tokens,
+                max_question_length=settings.rag_direct_solver_max_question_length,
+            ),
         ),
         local_expansion_neighbors=settings.rag_local_expansion_neighbors,
         retrieval_confidence_top_score=settings.rag_retrieval_confidence_top_score,
         retrieval_confidence_min_hits=settings.rag_retrieval_confidence_min_hits,
         toc_index=toc_index,
+        topic_locator_front_matter_policy=TopicLocatorFrontMatterPolicy(
+            enabled=settings.rag_topic_locator_front_matter_suppression_enabled,
+            max_front_matter_page=settings.rag_topic_locator_front_matter_max_page,
+            allow_front_matter_when_empty=settings.rag_topic_locator_front_matter_allow_when_empty,
+            suppress_when_page_unknown=settings.rag_topic_locator_front_matter_suppress_page_unknown,
+        ),
         max_new_tokens=settings.rag_max_new_tokens,
         max_new_tokens_limit=settings.rag_max_new_tokens_hard_limit,
         temperature=settings.rag_temperature,

@@ -91,14 +91,14 @@ def _positive_int(value: object) -> int | None:
     return parsed if parsed > 0 else None
 
 
-def _build_pdf_outline(hits: Sequence[Hit]) -> str:
+def _build_pdf_outline(hits: Sequence[tuple[str, Hit]]) -> str:
     lines: list[str] = []
-    for idx, hit in enumerate(hits, start=1):
+    for label, hit in hits:
         meta = hit.document.metadata
         start_page = meta.get("start_page", meta.get("page", "unknown"))
         end_page = meta.get("end_page", meta.get("page", "unknown"))
         lines.append(
-            f"[S{idx}] source_id={meta.get('source_id', 'unknown')} "
+            f"[{label}] source_id={meta.get('source_id', 'unknown')} "
             f"title={meta.get('title', 'unknown')} "
             f"start_page={start_page} "
             f"end_page={end_page} "
@@ -109,8 +109,14 @@ def _build_pdf_outline(hits: Sequence[Hit]) -> str:
 
 
 class PdfWindowGroundingContextPlugin(GroundingContextPlugin):
-    def __init__(self, *, max_attachments: int = 3) -> None:
+    def __init__(
+        self,
+        *,
+        max_attachments: int = 3,
+        max_pages_per_attachment: int = 4,
+    ) -> None:
         self.max_attachments = max(1, int(max_attachments))
+        self.max_pages_per_attachment = max(1, int(max_pages_per_attachment))
 
     @property
     def requires_attachments(self) -> bool:
@@ -146,9 +152,9 @@ class PdfWindowGroundingContextPlugin(GroundingContextPlugin):
         except Exception:
             return None
 
-    def _attachments_for_hits(self, hits: Sequence[Hit]) -> tuple[list[Hit], list[ChatAttachment]]:
+    def _attachments_for_hits(self, hits: Sequence[Hit]) -> tuple[list[tuple[str, Hit]], list[ChatAttachment]]:
         attachments: list[ChatAttachment] = []
-        attached_hits: list[Hit] = []
+        attached_hits: list[tuple[str, Hit]] = []
         reader_cache: dict[Path, Any] = {}
         for idx, hit in enumerate(hits, start=1):
             if len(attachments) >= self.max_attachments:
@@ -161,9 +167,11 @@ class PdfWindowGroundingContextPlugin(GroundingContextPlugin):
             if not pdf_path.exists():
                 continue
             start_page = _positive_int(meta.get("start_page", meta.get("page")))
-            end_page = _positive_int(meta.get("end_page", meta.get("page")))
+            span_end_page = _positive_int(meta.get("end_page", meta.get("page")))
+            end_page = span_end_page
             if start_page is None or end_page is None:
                 continue
+            end_page = min(end_page, start_page + self.max_pages_per_attachment - 1)
             bytes_data = self._extract_pdf_window(
                 reader_cache=reader_cache,
                 pdf_path=pdf_path,
@@ -185,7 +193,7 @@ class PdfWindowGroundingContextPlugin(GroundingContextPlugin):
                     },
                 )
             )
-            attached_hits.append(hit)
+            attached_hits.append((label, hit))
         return attached_hits, attachments
 
     def build(

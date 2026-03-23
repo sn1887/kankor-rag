@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 import re
 
@@ -14,6 +14,7 @@ class RAGIntent(str, Enum):
     GROUNDED_TEXTBOOK = "grounded_textbook"
     PRACTICE_GENERATION = "practice_generation"
     TOPIC_LOCATOR = "topic_locator"
+    DIRECT_SOLVER = "direct_solver"
 
 
 RETRIEVAL_INTENTS = frozenset(
@@ -126,6 +127,79 @@ _SOLVE_KEYWORDS = {
     "محاسبه",
     "سوال",
     "پوښتنه",
+}
+
+_DIRECT_SOLVER_KEYWORDS = {
+    "solve",
+    "solution",
+    "compute",
+    "calculate",
+    "derive",
+    "simplify",
+    "evaluate",
+    "prove",
+    "حل",
+    "حل کن",
+    "حل کنید",
+    "حل کړه",
+    "محاسبه",
+    "حساب",
+    "معادله",
+    "فرمول",
+    "اثبات",
+    "ثابت کنید",
+    "محاسبه کن",
+    "محاسبه کنید",
+}
+
+_DIRECT_SOLVER_STEM_KEYWORDS = {
+    "math",
+    "mathematics",
+    "algebra",
+    "geometry",
+    "trigonometry",
+    "calculus",
+    "physics",
+    "chemistry",
+    "biology",
+    "science",
+    "equation",
+    "formula",
+    "ریاضی",
+    "رياضی",
+    "الجبر",
+    "هندسه",
+    "مثلثات",
+    "حسابان",
+    "فزیک",
+    "فیزیک",
+    "کیمیا",
+    "شیمی",
+    "بیولوژی",
+    "علوم",
+    "معادله",
+    "فرمول",
+    "انرژی",
+    "قوه",
+    "شتاب",
+    "سرعت",
+    "ریاکشن",
+}
+
+_DIRECT_SOLVER_PROBLEM_KEYWORDS = {
+    "find",
+    "given",
+    "determine",
+    "if",
+    "when",
+    "what is the value",
+    "یافتن",
+    "پیدا کنید",
+    "بدست آورید",
+    "داده شده",
+    "اگر",
+    "وقتی",
+    "مقدار",
 }
 
 _TOPIC_LOCATOR_KEYWORDS = {
@@ -317,6 +391,64 @@ _CHAPTER_NUMBER_TOKENS = {
 }
 
 
+@dataclass(slots=True)
+class DirectSolverPolicy:
+    enabled: bool = True
+    min_signal_score: int = 3
+    min_numeric_tokens: int = 2
+    max_question_length: int = 2400
+    solver_keywords: frozenset[str] = field(default_factory=lambda: frozenset(_DIRECT_SOLVER_KEYWORDS))
+    stem_keywords: frozenset[str] = field(default_factory=lambda: frozenset(_DIRECT_SOLVER_STEM_KEYWORDS))
+    problem_keywords: frozenset[str] = field(default_factory=lambda: frozenset(_DIRECT_SOLVER_PROBLEM_KEYWORDS))
+
+    def matches(self, *, normalized_question: str, raw_question: str) -> bool:
+        if not self.enabled:
+            return False
+        if not normalized_question:
+            return False
+        if len(raw_question) > self.max_question_length:
+            return False
+
+        has_solver_verb = any(keyword in normalized_question for keyword in self.solver_keywords)
+        has_stem_signal = any(keyword in normalized_question for keyword in self.stem_keywords)
+        has_problem_phrase = any(keyword in normalized_question for keyword in self.problem_keywords)
+        numeric_tokens = re.findall(r"\b[0-9۰-۹]+(?:[.,][0-9۰-۹]+)?\b", raw_question, flags=re.UNICODE)
+        has_numeric_density = len(numeric_tokens) >= self.min_numeric_tokens
+        has_equation = bool(
+            re.search(
+                r"(?:[A-Za-z\u0600-\u06FF]\s*[\+\-\*/\^=]\s*[A-Za-z0-9\u0600-\u06FF])|(?:[0-9۰-۹]\s*=\s*[0-9۰-۹])",
+                raw_question,
+                flags=re.UNICODE,
+            )
+        )
+        has_numbered_items = len(
+            re.findall(
+                r"(?:(?:^|\n)\s*(?:q\s*)?[0-9۰-۹]{1,2}\s*[\)\.\-])",
+                raw_question,
+                flags=re.IGNORECASE | re.MULTILINE | re.UNICODE,
+            )
+        ) >= 2
+
+        self_contained_signal = has_equation or has_numeric_density or has_numbered_items
+        if not self_contained_signal:
+            return False
+
+        score = 0
+        if has_solver_verb:
+            score += 2
+        if has_stem_signal:
+            score += 1
+        if has_problem_phrase:
+            score += 1
+        if has_numeric_density:
+            score += 1
+        if has_equation:
+            score += 2
+        if has_numbered_items:
+            score += 1
+        return score >= self.min_signal_score
+
+
 @dataclass(frozen=True, slots=True)
 class IntentRoute:
     intent: RAGIntent
@@ -325,8 +457,14 @@ class IntentRoute:
 
 
 class IntentRouter:
-    def __init__(self, *, max_decomposition_queries: int = 4) -> None:
+    def __init__(
+        self,
+        *,
+        max_decomposition_queries: int = 4,
+        direct_solver_policy: DirectSolverPolicy | None = None,
+    ) -> None:
         self.max_decomposition_queries = max(1, int(max_decomposition_queries))
+        self.direct_solver_policy = direct_solver_policy or DirectSolverPolicy()
 
     @staticmethod
     def _normalize(text: str) -> str:
@@ -367,6 +505,8 @@ class IntentRouter:
             return RAGIntent.PRACTICE_GENERATION
         if self._contains_any(normalized, _STUDY_COACH_KEYWORDS):
             return RAGIntent.STUDY_COACH
+        if self.direct_solver_policy.matches(normalized_question=normalized, raw_question=question):
+            return RAGIntent.DIRECT_SOLVER
         return RAGIntent.GROUNDED_TEXTBOOK
 
     @classmethod

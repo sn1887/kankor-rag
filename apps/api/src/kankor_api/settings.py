@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     rag_llm_backend: str = Field(default='transformers', alias='RAG_LLM_BACKEND')
     rag_model_id: str = Field(default='Qwen/Qwen3.5-2B', alias='RAG_MODEL_ID')
     rag_openai_model_id: str = Field(default='gpt-4o-mini', alias='RAG_OPENAI_MODEL_ID')
-    rag_gemini_model_id: str = Field(default='gemini-2.0-flash', alias='RAG_GEMINI_MODEL_ID')
+    rag_gemini_model_id: str = Field(default='gemini-2.5-flash', alias='RAG_GEMINI_MODEL_ID')
     rag_gemini_fallback_model_id: str | None = Field(default=None, alias='RAG_GEMINI_FALLBACK_MODEL_ID')
     rag_deepseek_model_id: str = Field(default='deepseek-chat', alias='RAG_DEEPSEEK_MODEL_ID')
     rag_embedding_model_id: str = Field(default='intfloat/multilingual-e5-small', alias='RAG_EMBEDDING_MODEL_ID')
@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     rag_vector_store_backend: str = Field(default='faiss', alias='RAG_VECTOR_STORE_BACKEND')
     rag_context_mode: str = Field(default='text', alias='RAG_CONTEXT_MODE')
     rag_pdf_window_max_attachments: int = Field(default=3, alias='RAG_PDF_WINDOW_MAX_ATTACHMENTS')
+    rag_pdf_window_max_pages_per_attachment: int = Field(
+        default=4,
+        alias='RAG_PDF_WINDOW_MAX_PAGES_PER_ATTACHMENT',
+    )
     rag_top_k: int = Field(default=5, alias='RAG_TOP_K')
     rag_min_score: float = Field(default=0.15, alias='RAG_MIN_SCORE')
     rag_local_expansion_neighbors: int = Field(default=1, alias='RAG_LOCAL_EXPANSION_NEIGHBORS')
@@ -51,6 +55,26 @@ class Settings(BaseSettings):
     rag_intent_router_max_decomposition_queries: int = Field(
         default=4,
         alias='RAG_INTENT_ROUTER_MAX_DECOMPOSITION_QUERIES',
+    )
+    rag_direct_solver_enabled: bool = Field(default=True, alias='RAG_DIRECT_SOLVER_ENABLED')
+    rag_direct_solver_min_signal_score: int = Field(default=3, alias='RAG_DIRECT_SOLVER_MIN_SIGNAL_SCORE')
+    rag_direct_solver_min_numeric_tokens: int = Field(default=2, alias='RAG_DIRECT_SOLVER_MIN_NUMERIC_TOKENS')
+    rag_direct_solver_max_question_length: int = Field(default=2400, alias='RAG_DIRECT_SOLVER_MAX_QUESTION_LENGTH')
+    rag_topic_locator_front_matter_suppression_enabled: bool = Field(
+        default=True,
+        alias='RAG_TOPIC_LOCATOR_FRONT_MATTER_SUPPRESSION_ENABLED',
+    )
+    rag_topic_locator_front_matter_max_page: int = Field(
+        default=6,
+        alias='RAG_TOPIC_LOCATOR_FRONT_MATTER_MAX_PAGE',
+    )
+    rag_topic_locator_front_matter_allow_when_empty: bool = Field(
+        default=False,
+        alias='RAG_TOPIC_LOCATOR_FRONT_MATTER_ALLOW_WHEN_EMPTY',
+    )
+    rag_topic_locator_front_matter_suppress_page_unknown: bool = Field(
+        default=False,
+        alias='RAG_TOPIC_LOCATOR_FRONT_MATTER_SUPPRESS_PAGE_UNKNOWN',
     )
     rag_max_new_tokens: int = Field(default=256, alias='RAG_MAX_NEW_TOKENS')
     rag_max_new_tokens_hard_limit: int = Field(default=1024, alias='RAG_MAX_NEW_TOKENS_HARD_LIMIT')

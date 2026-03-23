@@ -74,7 +74,9 @@ _GRADE_HINT_TOKENS = {
 
 
 def _normalize_text(text: str) -> str:
-    cleaned = re.sub(r"[^\w\u0600-\u06FF\s]", " ", text.lower(), flags=re.UNICODE)
+    # Treat ZWNJ as whitespace so Persian/Dari compound words tokenize consistently.
+    text = text.replace("\u200c", " ")
+    cleaned = re.sub(r"[^\w\s]", " ", text.lower(), flags=re.UNICODE)
     return re.sub(r"\s+", " ", cleaned, flags=re.UNICODE).strip()
 
 
@@ -94,7 +96,7 @@ def _extract_chapter_number(question: str) -> str | None:
         return None
 
     explicit = re.search(
-        r"(?:chapter|chap|فصل|باب)\s+([0-9۰-۹]{1,2}|[a-z\u0600-\u06FF]+)",
+        r"(?:chapter|chap|lesson|unit|فصل|باب|بخش|درس)\s+([0-9۰-۹]{1,2}|[a-z\u0600-\u06FF]+)",
         normalized,
         flags=re.IGNORECASE | re.UNICODE,
     )
@@ -127,6 +129,79 @@ def _extract_grade_hint(question: str) -> str | None:
     return None
 
 
+_TITLE_STOPWORDS = {
+    "where",
+    "which",
+    "what",
+    "is",
+    "are",
+    "the",
+    "a",
+    "an",
+    "of",
+    "in",
+    "on",
+    "page",
+    "pages",
+    "chapter",
+    "chap",
+    "lesson",
+    "unit",
+    "title",
+    "name",
+    "find",
+    "taught",
+    "covered",
+    "در",
+    "کدام",
+    "فصل",
+    "درس",
+    "بخش",
+    "باب",
+    "صفحه",
+    "چی",
+    "چه",
+    "است",
+    "هست",
+    "کجاست",
+    "کجا",
+    "په",
+    "کوم",
+    "في",
+    "أي",
+}
+
+
+def _extract_title_hint_tokens(question: str) -> list[str]:
+    normalized = _normalize_text(question)
+    if not normalized:
+        return []
+    tokens = [token for token in normalized.split() if token not in _TITLE_STOPWORDS]
+    # Keep at least one token for short title queries like "توحید کجاست؟".
+    if not tokens:
+        return []
+    return tokens[:10]
+
+
+def _title_match_score(*, query_tokens: Sequence[str], title_text: str) -> float:
+    if not query_tokens:
+        return 0.0
+    normalized_title = _normalize_text(title_text)
+    if not normalized_title:
+        return 0.0
+
+    query_set = set(query_tokens)
+    title_tokens = normalized_title.split()
+    title_set = set(title_tokens)
+    if not title_set:
+        return 0.0
+
+    overlap = len(query_set & title_set) / max(1, len(query_set))
+    contiguous = " ".join(query_tokens) in normalized_title
+    score = (0.62 * overlap) + (0.38 * (1.0 if contiguous else 0.0))
+    return max(0.0, min(1.0, float(score)))
+
+
 @dataclass(frozen=True, slots=True)
 class TOCEntry:
     source_id: str
@@ -139,12 +214,19 @@ class TOCEntry:
     start_page: int
     end_page: int
     line_text: str
+    source_pdf_path: str
+    frontmatter_chapter_title: str | None = None
+    logical_start_page: int | None = None
+    logical_end_page: int | None = None
+    heading_source: str | None = None
+    heading_score: float | None = None
+    toc_entry_kind: str | None = None
 
     @property
     def document_id(self) -> str:
         return f"toc:{self.source_id}:ch{self.chapter_number}:p{self.page}"
 
-    def to_hit(self, *, score: float) -> Hit:
+    def to_hit(self, *, score: float, match_kind: str) -> Hit:
         return Hit(
             document=Document(
                 id=self.document_id,
@@ -158,8 +240,16 @@ class TOCEntry:
                     "start_page": self.start_page,
                     "end_page": self.end_page,
                     "source_type": "toc_manifest",
+                    "source_pdf_path": self.source_pdf_path,
                     "chapter_number": self.chapter_number,
                     "chapter_title": self.chapter_title,
+                    "frontmatter_chapter_title": self.frontmatter_chapter_title,
+                    "logical_start_page": self.logical_start_page,
+                    "logical_end_page": self.logical_end_page,
+                    "heading_source": self.heading_source,
+                    "heading_score": self.heading_score,
+                    "toc_entry_kind": self.toc_entry_kind,
+                    "toc_match_kind": match_kind,
                 },
             ),
             score=max(0.0, min(1.0, float(score))),
@@ -194,6 +284,7 @@ class TOCIndex:
                 end_page = _coerce_positive_int(row.get("end_page")) or start_page
                 if page is None or start_page is None or end_page is None:
                     continue
+                source_pdf_path = str(row.get("source_pdf_path", "")).strip()
                 entries.append(
                     TOCEntry(
                         source_id=str(row.get("source_id", "")).strip(),
@@ -206,32 +297,60 @@ class TOCIndex:
                         start_page=start_page,
                         end_page=end_page,
                         line_text=str(row.get("line_text", "")).strip(),
+                        source_pdf_path=source_pdf_path,
+                        frontmatter_chapter_title=str(row.get("frontmatter_chapter_title", "")).strip() or None,
+                        logical_start_page=_coerce_positive_int(row.get("logical_start_page")),
+                        logical_end_page=_coerce_positive_int(row.get("logical_end_page")),
+                        heading_source=str(row.get("heading_source", "")).strip() or None,
+                        heading_score=(
+                            float(row["heading_score"])
+                            if row.get("heading_score") not in (None, "")
+                            else None
+                        ),
+                        toc_entry_kind=str(row.get("toc_entry_kind", "")).strip() or None,
                     )
                 )
         return cls(entries=entries)
 
     def search(self, *, question: str, top_k: int = 5) -> list[Hit]:
         chapter_number = _extract_chapter_number(question)
-        if chapter_number is None:
-            return []
         subject_hint = _extract_subject_hint(question)
         grade_hint = _extract_grade_hint(question)
 
         candidates: list[Hit] = []
-        for entry in self.entries:
-            if entry.chapter_number != chapter_number:
-                continue
-            if subject_hint and entry.subject and entry.subject != subject_hint:
-                continue
-            if grade_hint and entry.grade_band and entry.grade_band != grade_hint:
-                continue
+        if chapter_number is not None:
+            for entry in self.entries:
+                if entry.chapter_number != chapter_number:
+                    continue
+                if subject_hint and entry.subject and entry.subject != subject_hint:
+                    continue
+                if grade_hint and entry.grade_band and entry.grade_band != grade_hint:
+                    continue
 
-            score = 0.98
-            if subject_hint and entry.subject == subject_hint:
-                score += 0.01
-            if grade_hint and entry.grade_band == grade_hint:
-                score += 0.01
-            candidates.append(entry.to_hit(score=score))
+                score = 0.98
+                if subject_hint and entry.subject == subject_hint:
+                    score += 0.01
+                if grade_hint and entry.grade_band == grade_hint:
+                    score += 0.01
+                candidates.append(entry.to_hit(score=score, match_kind="chapter_number"))
+
+        if not candidates:
+            title_tokens = _extract_title_hint_tokens(question)
+            if not title_tokens:
+                return []
+
+            for entry in self.entries:
+                if subject_hint and entry.subject and entry.subject != subject_hint:
+                    continue
+                if grade_hint and entry.grade_band and entry.grade_band != grade_hint:
+                    continue
+
+                score = _title_match_score(query_tokens=title_tokens, title_text=entry.chapter_title or entry.line_text)
+                if score < 0.5:
+                    continue
+                # Nudge scores up a bit so downstream routing can treat them as "confident".
+                score = 0.7 + (0.3 * score)
+                candidates.append(entry.to_hit(score=score, match_kind="title"))
 
         ranked = sorted(candidates, key=lambda hit: hit.score, reverse=True)
         return ranked[: max(1, int(top_k))]

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from pathlib import Path
 
 import numpy as np
+import pytest
 
 from rag_core.contracts.embeddings import Embedder
 from rag_core.contracts.llm import LLMProvider
 from rag_core.contracts.vector_store import VectorStore
+from rag_core.rag.adaptive_retrieval import TopicLocatorFrontMatterPolicy
 from rag_core.rag.context_plugins import PdfWindowGroundingContextPlugin
 from rag_core.rag.pipeline import RAGPipeline
 from rag_core.rag.toc_locator import TOCIndex
@@ -34,6 +37,12 @@ class DummyLLM(LLMProvider):
         self.last_temperature = temperature
         self.last_attachments = attachments
         yield "ok"
+
+
+class AttachmentAwareLLM(DummyLLM):
+    @property
+    def supports_attachments(self) -> bool:
+        return True
 
 
 class DummyEmbedder(Embedder):
@@ -96,6 +105,15 @@ class DummyVectorStore(VectorStore):
     def search(self, query_vector: np.ndarray, *, top_k: int, filters=None) -> list[Hit]:
         self.search_calls += 1
         return [Hit(document=self.documents[1], score=0.99)]
+
+
+def _write_blank_pdf(path: Path, pages: int) -> None:
+    pypdf = pytest.importorskip("pypdf")
+    writer = pypdf.PdfWriter()
+    for _ in range(pages):
+        writer.add_blank_page(width=72, height=72)
+    with path.open("wb") as handle:
+        writer.write(handle)
 
 
 class DummyTOCIndex:
@@ -227,6 +245,23 @@ def test_stream_answer_study_coach_skips_retrieval_and_citations() -> None:
     assert pipeline.vector_store.search_calls == 0  # type: ignore[attr-defined]
 
 
+def test_stream_answer_direct_solver_skips_retrieval_and_citations() -> None:
+    pipeline, _ = _make_pipeline()
+    events = list(
+        pipeline.stream_answer(
+            question="Solve for x: 3x + 9 = 21",
+            history=[],
+        )
+    )
+    answer = "".join(
+        str(event["data"].get("text", ""))
+        for event in events
+        if event["type"] == "delta"
+    )
+    assert "### References" not in answer
+    assert pipeline.vector_store.search_calls == 0  # type: ignore[attr-defined]
+
+
 def test_stream_answer_decomposes_broad_grounded_queries() -> None:
     pipeline, _ = _make_pipeline()
     list(
@@ -267,6 +302,69 @@ def test_stream_answer_falls_back_to_text_when_llm_cannot_accept_pdf_attachments
     assert llm.last_attachments in (None, [])
 
 
+def test_stream_answer_uses_pdf_window_attachments_when_llm_supports_them(tmp_path) -> None:
+    pdf_path = tmp_path / "sample.pdf"
+    _write_blank_pdf(pdf_path, pages=3)
+
+    class PdfVectorStore(VectorStore):
+        def __init__(self) -> None:
+            self.search_calls = 0
+            self.documents = [
+                Document(
+                    id="doc-1",
+                    text="center evidence",
+                    metadata={
+                        "title": "G10 Biology",
+                        "subject": "biology",
+                        "language": "fa",
+                        "grade_band": "10",
+                        "source_id": "G10-Dr-Biology",
+                        "page": 1,
+                        "start_page": 1,
+                        "end_page": 2,
+                        "source_pdf_path": str(pdf_path),
+                        "chunk_index": 0,
+                    },
+                )
+            ]
+
+        @property
+        def size(self) -> int:
+            return len(self.documents)
+
+        def search(self, query_vector: np.ndarray, *, top_k: int, filters=None) -> list[Hit]:
+            self.search_calls += 1
+            return [Hit(document=self.documents[0], score=0.99)]
+
+    llm = AttachmentAwareLLM()
+    pipeline = RAGPipeline(
+        llm=llm,
+        embedder=DummyEmbedder(),
+        vector_store=PdfVectorStore(),
+        corpus_version="test@1",
+        retrieval_confidence_top_score=0.27,
+        local_expansion_neighbors=1,
+        max_new_tokens=128,
+        max_new_tokens_limit=256,
+        temperature=0.2,
+        temperature_min=0.0,
+        temperature_max=2.0,
+        grounding_context_plugin=PdfWindowGroundingContextPlugin(max_attachments=1),
+    )
+
+    events = list(pipeline.stream_answer(question="Explain photosynthesis", history=[]))
+    answer = "".join(
+        str(event["data"].get("text", ""))
+        for event in events
+        if event["type"] == "delta"
+    )
+    assert llm.last_attachments
+    assert llm.last_attachments[0].media_type == "application/pdf"
+    assert llm.last_attachments[0].metadata.get("source_id") == "G10-Dr-Biology"
+    assert "### References" in answer
+    assert pipeline.vector_store.search_calls >= 1  # type: ignore[attr-defined]
+
+
 def test_stream_answer_topic_locator_consults_toc_index_first() -> None:
     pipeline, _ = _make_pipeline(
         toc_index=DummyTOCIndex(),  # type: ignore[arg-type]
@@ -282,3 +380,160 @@ def test_stream_answer_topic_locator_consults_toc_index_first() -> None:
     first_source = sources_event["data"][0]
     assert first_source.get("sourceId") == "G10-Dr-physic"
     assert first_source.get("page") == 18
+
+
+def test_stream_answer_topic_locator_front_matter_suppression_prefers_chapter_pages() -> None:
+    class TopicLocatorStore(VectorStore):
+        def __init__(self) -> None:
+            self.search_calls = 0
+            self.documents = [
+                Document(
+                    id="front-page",
+                    text="سرود ملی افغانستان سال چاپ ۱۳۹۸",
+                    metadata={
+                        "title": "G10 Physics",
+                        "subject": "physics",
+                        "language": "fa",
+                        "grade_band": "10",
+                        "source_id": "G10-Dr-physic",
+                        "page": 1,
+                        "start_page": 1,
+                        "end_page": 2,
+                        "chunk_index": 0,
+                        "source_type": "explanation",
+                    },
+                ),
+                Document(
+                    id="chapter-page",
+                    text="فصل دوم: حرکت",
+                    metadata={
+                        "title": "G10 Physics",
+                        "subject": "physics",
+                        "language": "fa",
+                        "grade_band": "10",
+                        "source_id": "G10-Dr-physic",
+                        "page": 18,
+                        "start_page": 18,
+                        "end_page": 19,
+                        "chunk_index": 8,
+                        "source_type": "explanation",
+                    },
+                ),
+            ]
+
+        @property
+        def size(self) -> int:
+            return len(self.documents)
+
+        def search(self, query_vector: np.ndarray, *, top_k: int, filters=None) -> list[Hit]:
+            self.search_calls += 1
+            return [
+                Hit(document=self.documents[0], score=0.97),
+                Hit(document=self.documents[1], score=0.87),
+            ]
+
+    pipeline = RAGPipeline(
+        llm=DummyLLM(),
+        embedder=DummyEmbedder(),
+        vector_store=TopicLocatorStore(),
+        corpus_version="test@1",
+        retrieval_confidence_top_score=0.1,
+        local_expansion_neighbors=0,
+        max_new_tokens=128,
+        max_new_tokens_limit=256,
+        temperature=0.2,
+        temperature_min=0.0,
+        temperature_max=2.0,
+        topic_locator_front_matter_policy=TopicLocatorFrontMatterPolicy(
+            enabled=True,
+            max_front_matter_page=6,
+            allow_front_matter_when_empty=False,
+        ),
+    )
+
+    events = list(
+        pipeline.stream_answer(
+            question="حرکت در کدام فصل و صفحه است؟",
+            history=[],
+        )
+    )
+    sources_event = next(event for event in events if event["type"] == "sources")
+    assert sources_event["data"]
+    assert all(source.get("page") != 1 for source in sources_event["data"])
+
+
+def test_stream_answer_chapter_routed_queries_constrain_retrieval_to_toc_span() -> None:
+    class RecordingVectorStore(VectorStore):
+        def __init__(self) -> None:
+            self.calls: list[dict[str, str] | None] = []
+            self.documents = [
+                Document(
+                    id="doc-in-span",
+                    text="motion content",
+                    metadata={
+                        "title": "G10 Physics",
+                        "subject": "physics",
+                        "language": "fa",
+                        "grade_band": "10",
+                        "source_id": "G10-Dr-physic",
+                        "page": 18,
+                        "start_page": 18,
+                        "end_page": 19,
+                        "chunk_index": 0,
+                    },
+                ),
+                Document(
+                    id="doc-out-span",
+                    text="other content",
+                    metadata={
+                        "title": "G10 Physics",
+                        "subject": "physics",
+                        "language": "fa",
+                        "grade_band": "10",
+                        "source_id": "G10-Dr-physic",
+                        "page": 50,
+                        "start_page": 50,
+                        "end_page": 51,
+                        "chunk_index": 20,
+                    },
+                ),
+            ]
+
+        @property
+        def size(self) -> int:
+            return len(self.documents)
+
+        def search(self, query_vector: np.ndarray, *, top_k: int, filters=None) -> list[Hit]:
+            self.calls.append(dict(filters) if filters else None)
+            return [
+                Hit(document=self.documents[0], score=0.99),
+                Hit(document=self.documents[1], score=0.98),
+            ]
+
+    vector_store = RecordingVectorStore()
+    pipeline = RAGPipeline(
+        llm=DummyLLM(),
+        embedder=DummyEmbedder(),
+        vector_store=vector_store,
+        corpus_version="test@1",
+        retrieval_confidence_top_score=0.27,
+        local_expansion_neighbors=0,
+        max_new_tokens=128,
+        max_new_tokens_limit=256,
+        temperature=0.2,
+        temperature_min=0.0,
+        temperature_max=2.0,
+        toc_index=DummyTOCIndex(),  # type: ignore[arg-type]
+    )
+
+    events = list(
+        pipeline.stream_answer(
+            question="Explain chapter 2 motion in grade 10 physics.",
+            history=[],
+        )
+    )
+    sources_event = next(event for event in events if event["type"] == "sources")
+    assert sources_event["data"]
+    assert all(source.get("sourceId") == "G10-Dr-physic" for source in sources_event["data"])
+    assert all(18 <= int(source.get("page") or 0) <= 19 for source in sources_event["data"])
+    assert any(call == {"source_id": "G10-Dr-physic"} for call in vector_store.calls)

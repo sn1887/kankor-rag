@@ -8,6 +8,7 @@ from rag_core.contracts.llm import LLMProvider
 from rag_core.contracts.vector_store import VectorStore
 from rag_core.rag.adaptive_retrieval import (
     RetrievalAssessment,
+    TopicLocatorFrontMatterPolicy,
     assess_retrieval_confidence,
     expand_local_window_hits,
     filter_topic_locator_hits,
@@ -92,6 +93,7 @@ class RAGPipeline:
         retrieval_confidence_top_score: float = 0.27,
         retrieval_confidence_min_hits: int = 1,
         toc_index: TOCIndex | None = None,
+        topic_locator_front_matter_policy: TopicLocatorFrontMatterPolicy | None = None,
     ) -> None:
         self.llm = llm
         self.embedder = embedder
@@ -115,6 +117,7 @@ class RAGPipeline:
         self.retrieval_confidence_top_score = float(retrieval_confidence_top_score)
         self.retrieval_confidence_min_hits = max(1, int(retrieval_confidence_min_hits))
         self.toc_index = toc_index
+        self.topic_locator_front_matter_policy = topic_locator_front_matter_policy or TopicLocatorFrontMatterPolicy()
 
     @staticmethod
     def _normalize_user_text(text: str) -> str:
@@ -147,19 +150,70 @@ class RAGPipeline:
         return "سلام! خوش آمدید. بگویید روی کدام مضمون، فصل یا مفهوم کانکور کار کنیم."
 
     def _search_query(self, question: str) -> list[Hit]:
+        return self._search_query_with_options(question)
+
+    def _search_query_with_options(
+        self,
+        question: str,
+        *,
+        top_k: int | None = None,
+        filters: dict[str, str] | None = None,
+    ) -> list[Hit]:
         query_vector = self.embedder.embed_query(question)
-        return self.vector_store.search(query_vector, top_k=self.top_k)
+        requested_k = self.top_k if top_k is None else max(1, int(top_k))
+        return self.vector_store.search(query_vector, top_k=requested_k, filters=filters)
+
+    @staticmethod
+    def _coerce_positive_int(value: object) -> int | None:
+        if isinstance(value, bool):
+            return None
+        try:
+            number = int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+        return number if number > 0 else None
+
+    @classmethod
+    def _hit_overlaps_page_span(cls, hit: Hit, *, span_start: int, span_end: int) -> bool:
+        if span_start > span_end:
+            return False
+        meta = hit.document.metadata
+        start_page = cls._coerce_positive_int(meta.get("start_page", meta.get("page")))
+        end_page = cls._coerce_positive_int(meta.get("end_page", meta.get("page")))
+        if start_page is None or end_page is None:
+            return False
+        return end_page >= span_start and start_page <= span_end
 
     def retrieve(self, question: str) -> list[Hit]:
         return self.retrieve_many([question])
 
-    def retrieve_many(self, questions: Sequence[str]) -> list[Hit]:
+    def retrieve_many(
+        self,
+        questions: Sequence[str],
+        *,
+        filters: dict[str, str] | None = None,
+        page_span: tuple[int, int] | None = None,
+        overfetch_multiplier: int = 8,
+    ) -> list[Hit]:
+        resolved_overfetch = max(1, int(overfetch_multiplier))
         hit_groups: list[list[Hit]] = []
         for question in questions:
             cleaned = question.strip()
             if not cleaned:
                 continue
-            hit_groups.append(self._search_query(cleaned))
+            candidates = self._search_query_with_options(
+                cleaned,
+                top_k=self.top_k * resolved_overfetch,
+                filters=filters,
+            )
+            if page_span is not None:
+                span_start, span_end = page_span
+                candidates = [
+                    hit
+                    for hit in candidates
+                    if self._hit_overlaps_page_span(hit, span_start=span_start, span_end=span_end)
+                ]
+            hit_groups.append(candidates)
         if not hit_groups:
             return []
         return merge_retrieval_hits(
@@ -178,6 +232,25 @@ class RAGPipeline:
     @staticmethod
     def _should_expand_neighbors(intent: RAGIntent) -> bool:
         return intent in {RAGIntent.GROUNDED_TEXTBOOK, RAGIntent.PRACTICE_GENERATION}
+
+    @classmethod
+    def _select_unambiguous_toc_route(cls, toc_hits: Sequence[Hit]) -> Hit | None:
+        if not toc_hits:
+            return None
+        source_ids = {
+            str(hit.document.metadata.get("source_id", "")).strip()
+            for hit in toc_hits
+            if str(hit.document.metadata.get("source_id", "")).strip()
+        }
+        if len(source_ids) == 1:
+            return toc_hits[0]
+        if len(toc_hits) >= 2:
+            top = toc_hits[0]
+            second = toc_hits[1]
+            match_kind = str(top.document.metadata.get("toc_match_kind", "")).strip().lower()
+            if match_kind == "title" and float(top.score) >= float(second.score) + 0.05:
+                return top
+        return None
 
     def resolve_generation_params(
         self,
@@ -219,36 +292,73 @@ class RAGPipeline:
         hits: list[Hit] = []
         if self._should_retrieve(intent):
             queries = route.retrieval_queries or [question]
-            hits = self.retrieve_many(queries)
+            toc_hits: list[Hit] = []
+            toc_route: Hit | None = None
+            toc_short_circuit = False
+            if self.toc_index is not None:
+                if intent == RAGIntent.TOPIC_LOCATOR:
+                    toc_hits = self.toc_index.search(question=question, top_k=self.top_k)
+                else:
+                    chapter_hint = IntentRouter._extract_chapter_number(question=question)
+                    if chapter_hint is not None:
+                        toc_hits = self.toc_index.search(question=question, top_k=self.top_k)
+                toc_route = self._select_unambiguous_toc_route(toc_hits)
+
+            if intent == RAGIntent.TOPIC_LOCATOR and toc_route is not None:
+                toc_short_circuit = True
+                hits = list(toc_hits)[: max(1, int(self.top_k))]
+            elif toc_route is not None and intent in {RAGIntent.GROUNDED_TEXTBOOK, RAGIntent.PRACTICE_GENERATION}:
+                route_meta = toc_route.document.metadata
+                source_id = str(route_meta.get("source_id", "")).strip()
+                span_start = self._coerce_positive_int(route_meta.get("start_page")) or self._coerce_positive_int(
+                    route_meta.get("page")
+                )
+                span_end = self._coerce_positive_int(route_meta.get("end_page")) or span_start
+                filters = {"source_id": source_id} if source_id else None
+                page_span = (span_start, span_end) if span_start and span_end else None
+
+                hits = self.retrieve_many(
+                    queries,
+                    filters=filters,
+                    page_span=page_span,
+                )
+                # If the chapter span is mismatched or too narrow, fall back to the full book.
+                if not hits and filters is not None:
+                    hits = self.retrieve_many(
+                        queries,
+                        filters=filters,
+                        page_span=None,
+                    )
+                # Last resort: global retrieval.
+                if not hits:
+                    hits = self.retrieve_many(queries)
+            else:
+                hits = self.retrieve_many(queries)
             if intent == RAGIntent.TOPIC_LOCATOR:
-                toc_hits: list[Hit] = []
-                if self.toc_index is not None:
-                    toc_hits = self.toc_index.search(
+                if not toc_short_circuit:
+                    if toc_hits:
+                        hits = merge_retrieval_hits(
+                            hit_groups=[toc_hits, hits],
+                            top_k=self.top_k,
+                            min_score=self.min_score,
+                        )
+                    chapter_hits = find_topic_locator_chapter_hits(
+                        question=question,
+                        vector_store=self.vector_store,
+                        top_k=self.top_k,
+                    )
+                    if chapter_hits:
+                        hits = merge_retrieval_hits(
+                            hit_groups=[hits, chapter_hits],
+                            top_k=self.top_k,
+                            min_score=self.min_score,
+                        )
+                    hits = filter_topic_locator_hits(
+                        hits=hits,
                         question=question,
                         top_k=self.top_k,
+                        front_matter_policy=self.topic_locator_front_matter_policy,
                     )
-                if toc_hits:
-                    hits = merge_retrieval_hits(
-                        hit_groups=[toc_hits, hits],
-                        top_k=self.top_k,
-                        min_score=self.min_score,
-                    )
-                chapter_hits = find_topic_locator_chapter_hits(
-                    question=question,
-                    vector_store=self.vector_store,
-                    top_k=self.top_k,
-                )
-                if chapter_hits:
-                    hits = merge_retrieval_hits(
-                        hit_groups=[hits, chapter_hits],
-                        top_k=self.top_k,
-                        min_score=self.min_score,
-                    )
-                hits = filter_topic_locator_hits(
-                    hits=hits,
-                    question=question,
-                    top_k=self.top_k,
-                )
             if self._should_expand_neighbors(intent):
                 hits = expand_local_window_hits(
                     hits=hits,

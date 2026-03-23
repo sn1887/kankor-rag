@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 
 from rag_core.contracts.vector_store import VectorStore
@@ -14,6 +14,114 @@ class RetrievalAssessment:
     reason: str
     top_score: float | None
     hit_count: int
+
+
+_FRONT_MATTER_SOURCE_TYPES = frozenset(
+    {
+        "front_matter",
+        "frontmatter",
+        "cover",
+        "title_page",
+        "preface",
+        "table_of_contents",
+        "toc",
+        "contents",
+        "toc_manifest_frontmatter",
+    }
+)
+
+_FRONT_MATTER_TEXT_MARKERS = frozenset(
+    {
+        "فهرست مطالب",
+        "فهرست",
+        "سرود ملی",
+        "سال چاپ",
+        "table of contents",
+        "contents",
+        "copyright",
+        "isbn",
+        "edition",
+        "dedication",
+        "publisher",
+    }
+)
+
+_CHAPTER_HEADING_PATTERN = re.compile(
+    r"(?:^|\s)(?:chapter|chap|lesson|unit|فصل|باب|بخش|درس)\s*[0-9۰-۹]{1,2}",
+    flags=re.IGNORECASE | re.UNICODE,
+)
+
+
+@dataclass(slots=True)
+class TopicLocatorFrontMatterPolicy:
+    enabled: bool = True
+    max_front_matter_page: int = 6
+    suppress_when_page_unknown: bool = False
+    keep_toc_manifest_hits: bool = True
+    allow_front_matter_when_empty: bool = False
+    source_type_markers: frozenset[str] = field(default_factory=lambda: _FRONT_MATTER_SOURCE_TYPES)
+    text_markers: frozenset[str] = field(default_factory=lambda: _FRONT_MATTER_TEXT_MARKERS)
+
+    def _contains_front_matter_marker(self, text: str) -> bool:
+        normalized = _normalize_text(text)
+        if not normalized:
+            return False
+        return any(marker in normalized for marker in self.text_markers)
+
+    def _has_chapter_signal(self, hit: Hit) -> bool:
+        metadata = hit.document.metadata
+        if str(metadata.get("chapter_number", "")).strip():
+            return True
+        if str(metadata.get("frontmatter_chapter_title", "")).strip():
+            return True
+        chapter_title = str(metadata.get("chapter_title", "")).strip()
+        if chapter_title and not self._contains_front_matter_marker(chapter_title):
+            return True
+        content = " ".join(
+            [
+                hit.document.text,
+                chapter_title,
+                str(metadata.get("line_text", "")),
+            ]
+        ).strip()
+        return bool(_CHAPTER_HEADING_PATTERN.search(content))
+
+    def is_front_matter(self, hit: Hit) -> bool:
+        if not self.enabled:
+            return False
+        metadata = hit.document.metadata
+
+        source_type = str(metadata.get("source_type", "")).strip().lower()
+        if self.keep_toc_manifest_hits and source_type == "toc_manifest":
+            return False
+        if source_type and source_type in self.source_type_markers and not self._has_chapter_signal(hit):
+            return True
+
+        page = _coerce_int(metadata.get("page"))
+        start_page = _coerce_int(metadata.get("start_page"))
+        effective_page = page if page is not None else start_page
+        if effective_page is None and self.suppress_when_page_unknown:
+            return True
+
+        text_fields: list[str] = [hit.document.text]
+        chapter_title = str(metadata.get("chapter_title", "")).strip()
+        if chapter_title:
+            text_fields.append(chapter_title)
+        frontmatter_chapter_title = str(metadata.get("frontmatter_chapter_title", "")).strip()
+        if frontmatter_chapter_title:
+            text_fields.append(frontmatter_chapter_title)
+        combined_text = " ".join(part for part in text_fields if part).strip()
+        contains_front_marker = self._contains_front_matter_marker(combined_text)
+        has_chapter_signal = self._has_chapter_signal(hit)
+
+        if effective_page is not None and effective_page <= max(1, int(self.max_front_matter_page)):
+            if contains_front_marker:
+                return True
+            if not has_chapter_signal:
+                return True
+        if contains_front_marker and not has_chapter_signal:
+            return True
+        return False
 
 
 def _coerce_int(value: object) -> int | None:
@@ -236,12 +344,12 @@ def filter_topic_locator_hits(
     hits: Sequence[Hit],
     question: str,
     top_k: int,
+    front_matter_policy: TopicLocatorFrontMatterPolicy | None = None,
 ) -> list[Hit]:
+    resolved_top_k = max(1, int(top_k))
+    policy = front_matter_policy or TopicLocatorFrontMatterPolicy()
     subject_hint = _extract_subject_hint(question)
     grade_hint = _extract_grade_hint(question)
-    if not subject_hint and not grade_hint:
-        return list(hits)[: max(1, int(top_k))]
-
     filtered: list[Hit] = []
     for hit in hits:
         metadata = hit.document.metadata
@@ -252,11 +360,20 @@ def filter_topic_locator_hits(
         if grade_hint and grade and grade != grade_hint:
             continue
         filtered.append(hit)
+    candidates = filtered if filtered else list(hits)
+    if not candidates:
+        return []
 
-    if not filtered:
-        return list(hits)[: max(1, int(top_k))]
-    ranked = sorted(filtered, key=lambda item: item.score, reverse=True)
-    return ranked[: max(1, int(top_k))]
+    ranked_candidates = sorted(candidates, key=lambda item: item.score, reverse=True)
+    if not policy.enabled:
+        return ranked_candidates[:resolved_top_k]
+
+    non_front_matter_hits = [hit for hit in ranked_candidates if not policy.is_front_matter(hit)]
+    if non_front_matter_hits:
+        return non_front_matter_hits[:resolved_top_k]
+    if policy.allow_front_matter_when_empty:
+        return ranked_candidates[:resolved_top_k]
+    return []
 
 
 def _neighbor_candidates(

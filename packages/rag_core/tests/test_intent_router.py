@@ -56,7 +56,19 @@ def test_intent_router_question_sheet_avoids_full_ocr_blob_query() -> None:
         "3) Write the formula for acceleration."
     )
     route = router.route(question=question)
+    assert route.intent == RAGIntent.DIRECT_SOLVER
+    assert route.retrieval_queries == []
+
+
+def test_intent_router_classifies_self_contained_stem_problem_as_direct_solver() -> None:
+    router = IntentRouter()
+    route = router.route(question="Solve for x: 2x + 5 = 17")
+    assert route.intent == RAGIntent.DIRECT_SOLVER
+    assert route.retrieval_queries == []
+
+
+def test_intent_router_keeps_non_self_contained_stem_query_grounded() -> None:
+    router = IntentRouter()
+    route = router.route(question="Explain Newton's second law from grade 10 physics textbook.")
     assert route.intent == RAGIntent.GROUNDED_TEXTBOOK
-    assert route.is_broad
     assert route.retrieval_queries
-    assert route.retrieval_queries[0] != question.strip()

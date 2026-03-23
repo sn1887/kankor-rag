@@ -87,3 +87,13 @@ def test_resolved_whatsapp_redis_url_falls_back_to_redis_url_env(monkeypatch) ->
     monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6379/1")
     settings = Settings()
     assert settings.resolved_whatsapp_redis_url == "redis://127.0.0.1:6379/1"
+
+
+def test_adaptive_rag_policy_settings_are_loaded(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_DIRECT_SOLVER_ENABLED", "true")
+    monkeypatch.setenv("RAG_DIRECT_SOLVER_MIN_SIGNAL_SCORE", "4")
+    monkeypatch.setenv("RAG_TOPIC_LOCATOR_FRONT_MATTER_MAX_PAGE", "7")
+    settings = Settings()
+    assert settings.rag_direct_solver_enabled is True
+    assert settings.rag_direct_solver_min_signal_score == 4
+    assert settings.rag_topic_locator_front_matter_max_page == 7

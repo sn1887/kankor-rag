@@ -6,6 +6,7 @@ from rag_core.rag.adaptive_retrieval import (
     filter_topic_locator_hits,
     find_topic_locator_chapter_hits,
     merge_retrieval_hits,
+    TopicLocatorFrontMatterPolicy,
 )
 from rag_core.types import Document, Hit
 
@@ -120,3 +121,36 @@ def test_filter_topic_locator_hits_prefers_question_subject_hint() -> None:
     )
     assert filtered
     assert all(hit.document.metadata.get("subject") == "physics" for hit in filtered)
+
+
+def test_filter_topic_locator_hits_hard_suppresses_front_matter_when_alternatives_exist() -> None:
+    hits = [
+        Hit(
+            document=Document(
+                id="front-page",
+                text="سرود ملی افغانستان سال چاپ ۱۳۹۸",
+                metadata={"subject": "physics", "grade_band": "10", "page": 1, "source_type": "explanation"},
+            ),
+            score=0.95,
+        ),
+        Hit(
+            document=Document(
+                id="chapter-page",
+                text="فصل دوم: حرکت",
+                metadata={"subject": "physics", "grade_band": "10", "page": 18, "source_type": "explanation"},
+            ),
+            score=0.88,
+        ),
+    ]
+    filtered = filter_topic_locator_hits(
+        hits=hits,
+        question="حرکت در کدام فصل است؟",
+        top_k=5,
+        front_matter_policy=TopicLocatorFrontMatterPolicy(
+            enabled=True,
+            max_front_matter_page=6,
+            allow_front_matter_when_empty=False,
+        ),
+    )
+    assert filtered
+    assert all(hit.document.id != "front-page" for hit in filtered)

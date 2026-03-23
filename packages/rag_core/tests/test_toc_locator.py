@@ -53,3 +53,33 @@ def test_toc_index_returns_empty_when_chapter_absent(tmp_path) -> None:
     toc_path.write_text("", encoding="utf-8")
     index = TOCIndex.load(toc_path)
     assert index.search(question="فصل دوم کتاب فزیک چی است؟", top_k=5) == []
+
+
+def test_toc_index_title_search_fallback_finds_matching_entry(tmp_path) -> None:
+    toc_path = tmp_path / "toc_manifest.jsonl"
+    rows = [
+        {
+            "source_id": "G10-Dr-physic",
+            "title": "G10 Physics",
+            "subject": "physics",
+            "grade_band": "10",
+            "chapter_number": "2",
+            "chapter_title": "قوانین نیوتن",
+            "page": 18,
+            "start_page": 18,
+            "end_page": 19,
+            "line_text": "فصل دوم: قوانین نیوتن",
+        }
+    ]
+    toc_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+    index = TOCIndex.load(toc_path)
+    hits = index.search(question="قوانین نیوتن کجاست؟", top_k=3)
+    assert hits
+    hit = hits[0]
+    assert hit.document.metadata.get("source_id") == "G10-Dr-physic"
+    assert hit.document.metadata.get("toc_match_kind") == "title"
+    assert hit.score >= 0.9
