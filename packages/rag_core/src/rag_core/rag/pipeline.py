@@ -320,10 +320,10 @@ class RAGPipeline:
             if self.toc_index is not None:
                 if intent == RAGIntent.TOPIC_LOCATOR:
                     toc_hits = self.toc_index.search(question=question, top_k=self.top_k)
-                else:
-                    chapter_hint = IntentRouter._extract_chapter_number(question=question)
-                    if chapter_hint is not None:
-                        toc_hits = self.toc_index.search(question=question, top_k=self.top_k)
+                elif intent in {RAGIntent.GROUNDED_TEXTBOOK, RAGIntent.PRACTICE_GENERATION}:
+                    # Always consult the TOC for grounded intents. Many lesson/topic titles only exist
+                    # in the manifest (not in window-text chunks), so TOC routing is a retrieval-quality win.
+                    toc_hits = self.toc_index.search(question=question, top_k=self.top_k)
                 toc_route = self._select_unambiguous_toc_route(toc_hits)
 
             if intent == RAGIntent.TOPIC_LOCATOR and toc_route is not None:
