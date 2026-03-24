@@ -152,13 +152,18 @@ _TITLE_STOPWORDS = {
     "find",
     "taught",
     "covered",
+    "and",
     "در",
+    "و",
+    "یا",
     "کدام",
     "فصل",
     "درس",
     "بخش",
     "باب",
     "صفحه",
+    "ها",
+    "های",
     "چی",
     "چه",
     "است",
@@ -171,16 +176,60 @@ _TITLE_STOPWORDS = {
     "أي",
 }
 
+_BOOK_HINT_TOKENS = {
+    "book",
+    "textbook",
+    "کتاب",
+    "كتاب",
+}
+
+_LOCATOR_BOILERPLATE_TOKENS = {
+    # Common "where is it covered/taught" boilerplate.
+    "تدریس",
+    "تدريس",
+    "پیدا",
+    "پيدا",
+    "آمده",
+    "شده",
+    "شامل",
+}
+
+_TITLE_HINT_EXCLUDE_TOKENS: set[str] = set()
+_TITLE_HINT_EXCLUDE_TOKENS.update(_BOOK_HINT_TOKENS)
+_TITLE_HINT_EXCLUDE_TOKENS.update(_LOCATOR_BOILERPLATE_TOKENS)
+for terms in _SUBJECT_HINTS.values():
+    for term in terms:
+        _TITLE_HINT_EXCLUDE_TOKENS.update(_normalize_text(term).split())
+for terms in _GRADE_HINT_TOKENS.values():
+    for term in terms:
+        _TITLE_HINT_EXCLUDE_TOKENS.update(_normalize_text(term).split())
+
+_NUMERIC_TOKEN_PATTERN = re.compile(r"^[0-9۰-۹]+$", flags=re.UNICODE)
+
 
 def _extract_title_hint_tokens(question: str) -> list[str]:
     normalized = _normalize_text(question)
     if not normalized:
         return []
-    tokens = [token for token in normalized.split() if token not in _TITLE_STOPWORDS]
-    # Keep at least one token for short title queries like "توحید کجاست؟".
-    if not tokens:
+    raw_tokens = normalized.split()
+    candidates: list[tuple[int, str]] = []
+    for position, token in enumerate(raw_tokens):
+        if token in _TITLE_STOPWORDS:
+            continue
+        if token in _TITLE_HINT_EXCLUDE_TOKENS:
+            continue
+        candidates.append((position, token))
+    if not candidates:
         return []
-    return tokens[:10]
+
+    def _signal_key(item: tuple[int, str]) -> tuple[int, int, int]:
+        position, token = item
+        is_numeric = 1 if _NUMERIC_TOKEN_PATTERN.match(token) else 0
+        return (is_numeric, -len(token), position)
+
+    top = sorted(candidates, key=_signal_key)[:3]
+    top_sorted = sorted(top, key=lambda item: item[0])
+    return [token for _, token in top_sorted]
 
 
 def _title_match_score(*, query_tokens: Sequence[str], title_text: str) -> float:
