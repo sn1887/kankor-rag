@@ -556,6 +556,7 @@ def get_app_state() -> AppState:
             allow_front_matter_when_empty=settings.rag_topic_locator_front_matter_allow_when_empty,
             suppress_when_page_unknown=settings.rag_topic_locator_front_matter_suppress_page_unknown,
         ),
+        topic_locator_response_mode=settings.rag_topic_locator_response_mode,
         max_new_tokens=settings.rag_max_new_tokens,
         max_new_tokens_limit=settings.rag_max_new_tokens_hard_limit,
         temperature=settings.rag_temperature,

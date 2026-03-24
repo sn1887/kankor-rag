@@ -32,6 +32,7 @@ from rag_core.rag.prompts import (
     build_task_directive,
 )
 from rag_core.rag.toc_locator import TOCIndex
+from rag_core.rag.topic_locator_response import render_topic_locator_answer
 from rag_core.types import ChatTurn, Hit
 
 
@@ -96,6 +97,7 @@ class RAGPipeline:
         retrieval_confidence_min_hits: int = 1,
         toc_index: TOCIndex | None = None,
         topic_locator_front_matter_policy: TopicLocatorFrontMatterPolicy | None = None,
+        topic_locator_response_mode: str = "hybrid",
     ) -> None:
         self.llm = llm
         self.embedder = embedder
@@ -120,6 +122,7 @@ class RAGPipeline:
         self.retrieval_confidence_min_hits = max(1, int(retrieval_confidence_min_hits))
         self.toc_index = toc_index
         self.topic_locator_front_matter_policy = topic_locator_front_matter_policy or TopicLocatorFrontMatterPolicy()
+        self.topic_locator_response_mode = (topic_locator_response_mode or "hybrid").strip().lower()
 
     @staticmethod
     def _normalize_user_text(text: str) -> str:
@@ -404,6 +407,22 @@ class RAGPipeline:
             else []
         )
         yield {'type': 'sources', 'data': source_payload}
+
+        if (
+            intent == RAGIntent.TOPIC_LOCATOR
+            and self._should_retrieve(intent)
+            and self.topic_locator_response_mode != "llm"
+            and hits
+        ):
+            answer = render_topic_locator_answer(hits=hits, max_candidates=min(3, self.top_k))
+            yield {'type': 'delta', 'data': {'text': answer}}
+            references_suffix = build_references_suffix(
+                answer_markdown=answer,
+                sources=source_payload,
+            )
+            if references_suffix:
+                yield {'type': 'delta', 'data': {'text': references_suffix}}
+            return
 
         if self._should_retrieve(intent) and retrieval_assessment is not None and retrieval_assessment.weak:
             for token in self._confidence_fallback_response().split(' '):

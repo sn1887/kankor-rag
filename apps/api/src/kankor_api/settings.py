@@ -76,6 +76,10 @@ class Settings(BaseSettings):
         default=False,
         alias='RAG_TOPIC_LOCATOR_FRONT_MATTER_SUPPRESS_PAGE_UNKNOWN',
     )
+    rag_topic_locator_response_mode: str = Field(
+        default="hybrid",
+        alias="RAG_TOPIC_LOCATOR_RESPONSE_MODE",
+    )
     rag_max_new_tokens: int = Field(default=256, alias='RAG_MAX_NEW_TOKENS')
     rag_max_new_tokens_hard_limit: int = Field(default=1024, alias='RAG_MAX_NEW_TOKENS_HARD_LIMIT')
     rag_temperature: float = Field(default=0.2, alias='RAG_TEMPERATURE')
