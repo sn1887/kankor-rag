@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     rag_local_expansion_neighbors: int = Field(default=1, alias='RAG_LOCAL_EXPANSION_NEIGHBORS')
     rag_retrieval_confidence_top_score: float = Field(default=0.27, alias='RAG_RETRIEVAL_CONFIDENCE_TOP_SCORE')
     rag_retrieval_confidence_min_hits: int = Field(default=1, alias='RAG_RETRIEVAL_CONFIDENCE_MIN_HITS')
+    rag_retrieval_oos_top_score_threshold: float | None = Field(
+        default=None,
+        alias="RAG_RETRIEVAL_OOS_TOP_SCORE_THRESHOLD",
+    )
     rag_intent_router_max_decomposition_queries: int = Field(
         default=4,
         alias='RAG_INTENT_ROUTER_MAX_DECOMPOSITION_QUERIES',
@@ -124,6 +128,7 @@ class Settings(BaseSettings):
         'rag_openai_embedding_dimensions',
         'rag_gemini_embedding_dimensions',
         'rag_deepseek_embedding_dimensions',
+        'rag_retrieval_oos_top_score_threshold',
         mode='before',
     )
     @classmethod

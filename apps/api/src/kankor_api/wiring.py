@@ -549,6 +549,7 @@ def get_app_state() -> AppState:
         local_expansion_neighbors=settings.rag_local_expansion_neighbors,
         retrieval_confidence_top_score=settings.rag_retrieval_confidence_top_score,
         retrieval_confidence_min_hits=settings.rag_retrieval_confidence_min_hits,
+        retrieval_oos_top_score_threshold=settings.rag_retrieval_oos_top_score_threshold,
         toc_index=toc_index,
         topic_locator_front_matter_policy=TopicLocatorFrontMatterPolicy(
             enabled=settings.rag_topic_locator_front_matter_suppression_enabled,

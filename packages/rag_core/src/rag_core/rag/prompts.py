@@ -119,11 +119,39 @@ _QUESTION_SHEET_MARKERS = {
     "از ضمیمه",
 }
 
+_GROUNDED_CITATION_FEWSHOT = (
+    "نمونهٔ کوتاهِ ارجاع درون‌متنی:\n"
+    'در متن پاسخ بنویس: «قانون دوم نیوتن رابطهٔ نیرو و شتاب را بیان می‌کند. [S1 p.42]»\n'
+    'یا: «این تعریف در کتاب آمده است. [S2]»\n'
+)
+
 
 def detect_answer_language(question: str, default_language: str = 'fa') -> str:
     normalized = (default_language or 'fa').strip().lower()
-    if normalized in {'', 'auto', 'match-user'}:
+    if normalized in {'', 'auto'}:
         # Product default: prioritize Dari for Afghanistan-first tutoring UX.
+        return 'دری'
+    if normalized == 'match-user':
+        # Heuristic language matching (script + a few high-signal markers).
+        if re.search(r"[ټځڅډړږښګڼۍې]", question):
+            return 'پښتو'
+        if re.search(r"[a-z]", question.lower()):
+            return 'English'
+
+        normalized_question = _normalize_question(question)
+        if re.search(r"[ةىؤإأ]", question) or any(
+            marker in normalized_question
+            for marker in (
+                "اشرح",
+                "كيف",
+                "لماذا",
+                "ماذا",
+                "ما هو",
+                "ما هي",
+                "في",
+            )
+        ):
+            return 'العربية'
         return 'دری'
     return LANGUAGE_LABELS.get(normalized, 'دری')
 
@@ -348,6 +376,7 @@ def build_chat_messages(
             f'متن بازیابی‌شده:\n{context_block}\n\n'
             f'پرسش کاربر: {question}\n\n'
             f'{runtime_prefix}'
+            f'{_GROUNDED_CITATION_FEWSHOT}\n'
             'برای ادعاهای factual فقط از شواهد بالا استفاده کن. '
             'ارجاع درون‌متنی [S#] یا [S# p.N] بده، پاسخ را Markdown و آموزشی نگه دار.'
         )

@@ -95,6 +95,7 @@ class RAGPipeline:
         local_expansion_neighbors: int = 1,
         retrieval_confidence_top_score: float = 0.27,
         retrieval_confidence_min_hits: int = 1,
+        retrieval_oos_top_score_threshold: float | None = None,
         toc_index: TOCIndex | None = None,
         topic_locator_front_matter_policy: TopicLocatorFrontMatterPolicy | None = None,
         topic_locator_response_mode: str = "hybrid",
@@ -120,6 +121,11 @@ class RAGPipeline:
         self.local_expansion_neighbors = max(0, int(local_expansion_neighbors))
         self.retrieval_confidence_top_score = float(retrieval_confidence_top_score)
         self.retrieval_confidence_min_hits = max(1, int(retrieval_confidence_min_hits))
+        self.retrieval_oos_top_score_threshold = (
+            float(retrieval_oos_top_score_threshold)
+            if retrieval_oos_top_score_threshold is not None
+            else None
+        )
         self.toc_index = toc_index
         self.topic_locator_front_matter_policy = topic_locator_front_matter_policy or TopicLocatorFrontMatterPolicy()
         self.topic_locator_response_mode = (topic_locator_response_mode or "hybrid").strip().lower()
@@ -396,6 +402,25 @@ class RAGPipeline:
                 min_top_score=self.retrieval_confidence_top_score,
                 min_hits=self.retrieval_confidence_min_hits,
             )
+
+        if (
+            self._should_retrieve(intent)
+            and self.retrieval_oos_top_score_threshold is not None
+            and intent in {RAGIntent.GROUNDED_TEXTBOOK, RAGIntent.PRACTICE_GENERATION}
+        ):
+            top_score = float(hits[0].score) if hits else None
+            if top_score is None or top_score < self.retrieval_oos_top_score_threshold:
+                yield {'type': 'sources', 'data': []}
+                yield {
+                    'type': 'delta',
+                    'data': {
+                        'text': (
+                            "این سوال احتمالاً در محدودهٔ کتاب‌های درسی موجود در سیستم نیست. "
+                            "اگر سوال شما از کتاب‌های کانکور است، نام مضمون/صنف و چند کلیدواژهٔ دقیق‌تر را اضافه کنید."
+                        )
+                    },
+                }
+                return
 
         source_payload = (
             hits_to_source_payload(
