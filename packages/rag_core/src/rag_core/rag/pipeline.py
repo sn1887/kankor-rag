@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 import re
 
+import numpy as np
+
 from rag_core.contracts.embeddings import Embedder
 from rag_core.contracts.llm import LLMProvider
 from rag_core.contracts.vector_store import VectorStore
@@ -196,16 +198,36 @@ class RAGPipeline:
         overfetch_multiplier: int = 8,
     ) -> list[Hit]:
         resolved_overfetch = max(1, int(overfetch_multiplier))
-        hit_groups: list[list[Hit]] = []
+
+        # Per-request dedupe to avoid repeated embedding calls for identical variants.
+        cleaned_questions: list[str] = []
+        seen_keys: set[str] = set()
         for question in questions:
-            cleaned = question.strip()
+            cleaned = str(question).strip()
             if not cleaned:
                 continue
-            candidates = self._search_query_with_options(
-                cleaned,
-                top_k=self.top_k * resolved_overfetch,
-                filters=filters,
+            normalized_key = re.sub(r"\s+", " ", cleaned, flags=re.UNICODE).casefold()
+            if normalized_key in seen_keys:
+                continue
+            seen_keys.add(normalized_key)
+            cleaned_questions.append(cleaned)
+
+        if not cleaned_questions:
+            return []
+
+        query_vectors = np.asarray(self.embedder.embed_queries(cleaned_questions), dtype=np.float32)
+        if query_vectors.ndim == 1:
+            query_vectors = query_vectors.reshape(1, -1)
+        if query_vectors.shape[0] != len(cleaned_questions):
+            raise ValueError(
+                "embed_queries() must return an array of shape (len(texts), embedding_dim). "
+                f"Got shape={getattr(query_vectors, 'shape', None)} for texts={len(cleaned_questions)}."
             )
+
+        requested_k = self.top_k * resolved_overfetch
+        hit_groups: list[list[Hit]] = []
+        for query_vector in query_vectors:
+            candidates = self.vector_store.search(query_vector, top_k=requested_k, filters=filters)
             if page_span is not None:
                 span_start, span_end = page_span
                 candidates = [
