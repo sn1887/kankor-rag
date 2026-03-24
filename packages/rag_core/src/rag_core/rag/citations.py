@@ -80,6 +80,7 @@ def hits_to_source_payload(
                 'language': str(meta.get('language', 'unknown')),
                 'gradeBand': str(meta.get('grade_band', 'mixed')),
                 'sourceId': str(meta.get('source_id', '')),
+                'sourceType': str(meta.get('source_type', 'unknown')),
                 'page': page,
                 'pdfUrl': build_source_pdf_url(meta, url_template=template),
                 'corpusVersion': corpus_version,

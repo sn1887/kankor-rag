@@ -33,6 +33,7 @@ def test_hits_to_source_payload_includes_page_and_pdf_url() -> None:
                 "grade_band": "10",
                 "source_id": "G10-Dr-Biology",
                 "page": 7,
+                "source_type": "pdf_window",
             },
         ),
         score=0.95,
@@ -45,6 +46,7 @@ def test_hits_to_source_payload_includes_page_and_pdf_url() -> None:
     assert source["badge"] == "S1"
     assert source["page"] == 7
     assert source["sourceId"] == "G10-Dr-Biology"
+    assert source["sourceType"] == "pdf_window"
     assert source["pdfUrl"] == (
         "https://github.com/sn1887/afghan-high-school-textbooks/blob/main/"
         "docs/pdfs/grade_10/G10-Dr-Biology.pdf#page=7"
