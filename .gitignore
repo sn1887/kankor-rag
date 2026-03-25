@@ -65,3 +65,6 @@ artifacts/
 data/*
 !data/sample_corpus/
 !data/sample_corpus/**
+
+
+notes.md

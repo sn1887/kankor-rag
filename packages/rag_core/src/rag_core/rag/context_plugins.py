@@ -243,7 +243,8 @@ class PdfWindowGroundingContextPlugin(GroundingContextPlugin):
             f"پرسش کاربر: {question}\n\n"
             f"{runtime_prefix}"
             "برای ادعاهای factual فقط از PDFهای ضمیمه‌شده استفاده کن. "
-            "ارجاع درون‌متنی [S#] یا [S# p.N] بده، پاسخ را Markdown و آموزشی نگه دار."
+            "در متن پاسخ هیچ ارجاع درون‌متنی مانند [S1] تولید نکن و بخش «منابع/References» هم نساز. "
+            "پاسخ را Markdown و آموزشی نگه دار."
         )
         messages = list(history)
         messages.append(ChatTurn(role="user", content=user_prompt))

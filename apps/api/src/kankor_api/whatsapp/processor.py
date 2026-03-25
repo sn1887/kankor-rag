@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Sequence
 
+from rag_core.rag.citations import to_persian_digits
 from rag_core.rag.pipeline import RAGPipeline
 from rag_core.types import ChatTurn
 
@@ -45,24 +47,68 @@ class WhatsAppMessageProcessor:
                 return
 
             history = list(self.conversation_store.get_history(message.from_wa_id))
-            answer = self._generate_answer_sync(question, history)
-            if not answer.strip():
-                answer = (
+            body, reference_sources = self._generate_answer_sync(question, history)
+            if not body.strip():
+                body = (
                     "I could not generate a full answer right now. "
                     "Please try again with a slightly more specific question."
                 )
 
-            chunks = _split_for_whatsapp(answer, limit=self.max_reply_chars)
+            chunks = _split_for_whatsapp(body, limit=self.max_reply_chars)
             for index, chunk in enumerate(chunks):
                 await self.messenger.send_text(
                     to=message.from_wa_id,
                     text=chunk,
                     in_reply_to_message_id=message.message_id if index == 0 else None,
                 )
+
+            # Send references as a separate final message (WhatsApp-friendly, raw URLs).
+            if reference_sources:
+                refs_text = _render_whatsapp_references(reference_sources)
+                if refs_text.strip():
+                    refs_chunks = _split_for_whatsapp(refs_text, limit=self.max_reply_chars)
+                    try:
+                        for chunk in refs_chunks:
+                            await self.messenger.send_text(
+                                to=message.from_wa_id,
+                                text=chunk,
+                                in_reply_to_message_id=None,
+                            )
+                    except Exception:
+                        logger.warning(
+                            "Failed to send WhatsApp references for message %s; retrying once.",
+                            message.message_id,
+                            exc_info=True,
+                        )
+                        try:
+                            for chunk in refs_chunks:
+                                await self.messenger.send_text(
+                                    to=message.from_wa_id,
+                                    text=chunk,
+                                    in_reply_to_message_id=None,
+                                )
+                        except Exception:
+                            logger.warning(
+                                "Second attempt to send WhatsApp references failed for message %s.",
+                                message.message_id,
+                                exc_info=True,
+                            )
+                            # Best-effort: notify the user without leaking long URLs into history.
+                            try:
+                                await self.messenger.send_text(
+                                    to=message.from_wa_id,
+                                    text="منابع ارسال نشد. لطفاً دوباره تلاش کنید.",
+                                    in_reply_to_message_id=None,
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "Failed to send WhatsApp references failure notice for message %s.",
+                                    message.message_id,
+                                )
             self.conversation_store.append_turn(
                 message.from_wa_id,
                 user_content=question,
-                assistant_content=answer,
+                assistant_content=body,
             )
         except Exception:
             logger.exception("Failed to process WhatsApp message %s", message.message_id)
@@ -107,15 +153,19 @@ class WhatsAppMessageProcessor:
 
         return ""
 
-    def _generate_answer_sync(self, question: str, history: Sequence[ChatTurn]) -> str:
+    def _generate_answer_sync(self, question: str, history: Sequence[ChatTurn]) -> tuple[str, list[dict]]:
         deltas: list[str] = []
+        reference_sources: list[dict] = []
         for event in self.pipeline.stream_answer(question=question, history=history):
-            if event.get("type") != "delta":
-                continue
-            text = str(event.get("data", {}).get("text", ""))
-            if text:
-                deltas.append(text)
-        return "".join(deltas).strip()
+            event_type = event.get("type")
+            if event_type == "delta":
+                text = str(event.get("data", {}).get("text", ""))
+                if text:
+                    deltas.append(text)
+            elif event_type == "references":
+                data = dict(event.get("data") or {})
+                reference_sources = list(data.get("sources") or [])
+        return "".join(deltas).strip(), reference_sources
 
 
 def _split_for_whatsapp(text: str, *, limit: int) -> list[str]:
@@ -133,12 +183,17 @@ def _split_for_whatsapp(text: str, *, limit: int) -> list[str]:
             chunks.append(remaining)
             break
 
-        split_at = max(
-            remaining.rfind("\n", 0, limit),
-            remaining.rfind(" ", 0, limit),
-        )
+        split_at = max(remaining.rfind("\n", 0, limit), remaining.rfind(" ", 0, limit))
         if split_at < min_breakpoint:
             split_at = limit
+
+        # Avoid splitting inside URLs when possible.
+        url_match = None
+        for match in _URL_PATTERN.finditer(remaining):
+            if match.start() < split_at < match.end():
+                url_match = match
+        if url_match is not None and url_match.start() >= min_breakpoint:
+            split_at = url_match.start()
 
         chunk = remaining[:split_at].strip()
         if not chunk:
@@ -148,3 +203,28 @@ def _split_for_whatsapp(text: str, *, limit: int) -> list[str]:
         remaining = remaining[len(chunk):].lstrip()
 
     return chunks
+
+
+_URL_PATTERN = re.compile(r"https?://\\S+")
+
+
+def _render_whatsapp_references(sources: Sequence[dict]) -> str:
+    # Compact plain-text Dari, WhatsApp-friendly.
+    lines: list[str] = ["منابع:"]
+    for idx, source in enumerate(sources, start=1):
+        title = str(source.get("title") or source.get("sourceId") or "منبع نامشخص").strip()
+        page = source.get("page")
+        try:
+            page_num = int(page) if page is not None else None
+        except Exception:
+            page_num = None
+        if page_num is not None and page_num > 0:
+            item = f"{to_persian_digits(idx)}. {title}، صفحه {to_persian_digits(page_num)}"
+        else:
+            item = f"{to_persian_digits(idx)}. {title}"
+        lines.append(item)
+
+        url = str(source.get("pdfUrl") or "").strip()
+        if url:
+            lines.append(url)
+    return "\n".join(lines).strip()

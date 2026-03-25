@@ -7,6 +7,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
+from rag_core.rag.citations import render_references_markdown_from_sources
 
 from ..chat_parsing import MessageCandidate, extract_question_and_history
 from ..auth import require_bearer_api_key
@@ -161,10 +162,21 @@ def chat_completions(
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
                 ):
-                    if event['type'] != 'delta':
-                        continue
-                    delta_text = str(event['data'].get('text', ''))
-                    if not delta_text:
+                    if event["type"] == "references":
+                        data = dict(event.get("data") or {})
+                        if data.get("answer_has_references_heading"):
+                            continue
+                        sources = list(data.get("sources") or [])
+                        rendered = render_references_markdown_from_sources(sources=sources, heading="### منابع")
+                        if rendered.strip():
+                            delta_text = f"\n\n{rendered}"
+                        else:
+                            continue
+                    elif event["type"] == "delta":
+                        delta_text = str(event["data"].get("text", ""))
+                        if not delta_text:
+                            continue
+                    else:
                         continue
                     chunk = {
                         'id': completion_id,
@@ -196,15 +208,27 @@ def chat_completions(
         )
 
     chunks: list[str] = []
+    references_markdown = ""
     for event in pipeline.stream_answer(
         question=question,
         history=history,
         max_new_tokens=max_new_tokens,
         temperature=temperature,
     ):
-        if event['type'] == 'delta':
-            chunks.append(str(event['data'].get('text', '')))
-    answer = ''.join(chunks)
+        if event["type"] == "delta":
+            chunks.append(str(event["data"].get("text", "")))
+        elif event["type"] == "references":
+            data = dict(event.get("data") or {})
+            if data.get("answer_has_references_heading"):
+                continue
+            sources = list(data.get("sources") or [])
+            rendered = render_references_markdown_from_sources(sources=sources, heading="### منابع")
+            if rendered.strip():
+                references_markdown = rendered
+
+    answer = "".join(chunks).rstrip()
+    if references_markdown:
+        answer = f"{answer}\n\n{references_markdown}" if answer else references_markdown
     response = {
         'id': completion_id,
         'object': 'chat.completion',

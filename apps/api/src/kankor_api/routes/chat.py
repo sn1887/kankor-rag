@@ -4,6 +4,7 @@ from typing import List, Literal
 from fastapi import APIRouter, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from rag_core.rag.citations import render_references_markdown_from_sources
 from ..chat_parsing import MessageCandidate, extract_question_and_history
 from ..auth import require_bearer_api_key
 from ..wiring import get_app_state
@@ -38,6 +39,17 @@ def stream_chat(
     def event_stream():
         try:
             for event in pipeline.stream_answer(question=question, history=history):
+                if event["type"] == "references":
+                    data = dict(event.get("data") or {})
+                    if data.get("answer_has_references_heading"):
+                        continue
+                    sources = list(data.get("sources") or [])
+                    rendered = render_references_markdown_from_sources(sources=sources, heading="### منابع")
+                    if rendered.strip():
+                        payload = json.dumps({"text": f"\n\n{rendered}"}, ensure_ascii=False)
+                        yield b"event: delta\n"
+                        yield f"data: {payload}\n\n".encode("utf-8")
+                    continue
                 payload = json.dumps(event['data'], ensure_ascii=False)
                 yield f"event: {event['type']}\n".encode('utf-8')
                 yield f"data: {payload}\n\n".encode('utf-8')

@@ -106,7 +106,8 @@ def test_topic_locator_uses_deterministic_responder_and_skips_llm() -> None:
     answer = "".join(event["data"]["text"] for event in events if event["type"] == "delta")
 
     assert llm.calls == 0
-    assert "[S1" in answer
-    assert "### References" in answer
-    assert answer.count("### References") == 1
-
+    assert "[S1" not in answer
+    assert "### References" not in answer
+    assert "### منابع" not in answer
+    refs_event = next(event for event in events if event["type"] == "references")
+    assert refs_event["data"].get("sources")

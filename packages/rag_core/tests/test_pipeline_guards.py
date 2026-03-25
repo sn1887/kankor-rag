@@ -193,7 +193,7 @@ def test_stream_answer_uses_guarded_generation_values() -> None:
     assert llm.last_temperature == 0.0
 
 
-def test_stream_answer_appends_references_markdown() -> None:
+def test_stream_answer_emits_references_event() -> None:
     pipeline, _ = _make_pipeline()
     events = list(pipeline.stream_answer(question="Explain photosynthesis", history=[]))
     answer = "".join(
@@ -201,9 +201,44 @@ def test_stream_answer_appends_references_markdown() -> None:
         for event in events
         if event["type"] == "delta"
     )
-    assert "### References" in answer
-    assert "- [S1]" in answer
-    assert "[Open page](" in answer
+    assert "### References" not in answer
+    assert "### منابع" not in answer
+    refs_event = next(event for event in events if event["type"] == "references")
+    refs_sources = list(refs_event["data"].get("sources") or [])
+    assert refs_sources
+    assert refs_event["data"].get("strategy") in {"cited_badges", "lexical_overlap", "retrieval_topk"}
+
+
+def test_stream_answer_strips_inline_citations_while_streaming() -> None:
+    class CitingLLM(LLMProvider):
+        def stream_chat(
+            self,
+            *,
+            messages: Sequence[ChatTurn],
+            system_prompt: str,
+            max_new_tokens: int,
+            temperature: float,
+            attachments: Sequence[ChatAttachment] | None = None,
+        ) -> Iterator[str]:
+            _ = messages, system_prompt, max_new_tokens, temperature, attachments
+            # Split citation across chunks to exercise the streaming state machine.
+            yield "Answer ["
+            yield "S1"
+            yield " p.42] done."
+
+    pipeline = RAGPipeline(
+        llm=CitingLLM(),
+        embedder=DummyEmbedder(),
+        vector_store=DummyVectorStore(),
+        corpus_version="test@1",
+        min_score=0.0,
+    )
+    events = list(pipeline.stream_answer(question="Explain photosynthesis", history=[]))
+    answer = "".join(str(event["data"].get("text", "")) for event in events if event["type"] == "delta")
+    assert "[S1" not in answer
+    assert "Answer done." in answer
+    refs_event = next(event for event in events if event["type"] == "references")
+    assert refs_event["data"].get("sources")
 
 
 def test_stream_answer_local_expansion_adds_neighbor_sources() -> None:
@@ -298,7 +333,10 @@ def test_stream_answer_falls_back_to_text_when_llm_cannot_accept_pdf_attachments
         for event in events
         if event["type"] == "delta"
     )
-    assert "### References" in answer
+    assert "### References" not in answer
+    assert "### منابع" not in answer
+    refs_event = next(event for event in events if event["type"] == "references")
+    assert refs_event["data"].get("sources")
     assert llm.last_attachments in (None, [])
 
 
@@ -361,7 +399,10 @@ def test_stream_answer_uses_pdf_window_attachments_when_llm_supports_them(tmp_pa
     assert llm.last_attachments
     assert llm.last_attachments[0].media_type == "application/pdf"
     assert llm.last_attachments[0].metadata.get("source_id") == "G10-Dr-Biology"
-    assert "### References" in answer
+    assert "### References" not in answer
+    assert "### منابع" not in answer
+    refs_event = next(event for event in events if event["type"] == "references")
+    assert refs_event["data"].get("sources")
     assert pipeline.vector_store.search_calls >= 1  # type: ignore[attr-defined]
 
 

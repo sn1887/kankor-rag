@@ -30,11 +30,15 @@ set -a
 source "${ENV_FILE}"
 set +a
 
+# Force timing logs on for local eval/debug runs launched via this helper.
+export RAG_TIMING_DEBUG=true
+
 echo "Using env file: ${ENV_FILE}"
 echo "Effective RAG runtime config:"
 echo "  RAG_LLM_BACKEND=${RAG_LLM_BACKEND:-openai}"
 echo "  RAG_EMBEDDING_BACKEND=${RAG_EMBEDDING_BACKEND:-hash}"
 echo "  RAG_CONTEXT_MODE=${RAG_CONTEXT_MODE:-text}"
+echo "  RAG_TIMING_DEBUG=${RAG_TIMING_DEBUG}"
 echo "  RAG_INDEX_PATH=${RAG_INDEX_PATH:-/app/data/sample_index/index.faiss}"
 echo "  RAG_DOCSTORE_PATH=${RAG_DOCSTORE_PATH:-/app/data/sample_index/metadata.jsonl}"
 echo "  RAG_TOC_MANIFEST_PATH=${RAG_TOC_MANIFEST_PATH:-<auto-or-empty>}"

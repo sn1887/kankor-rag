@@ -565,6 +565,7 @@ def get_app_state() -> AppState:
         temperature_max=settings.rag_temperature_max,
         default_language=settings.rag_default_language,
         source_pdf_url_template=settings.rag_source_pdf_url_template,
+        references_max_sources=settings.rag_references_max_sources,
         grounding_context_plugin=_build_grounding_context_plugin(settings),
     )
     whatsapp_runtime = _build_whatsapp_runtime(settings, pipeline=pipeline)

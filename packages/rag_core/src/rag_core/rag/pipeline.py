@@ -19,8 +19,11 @@ from rag_core.rag.adaptive_retrieval import (
 )
 from rag_core.rag.citations import (
     DEFAULT_SOURCE_PDF_URL_TEMPLATE,
-    build_references_suffix,
+    InlineCitationStripper,
+    answer_includes_references_heading,
     hits_to_source_payload,
+    select_reference_sources_for_answer,
+    strip_inline_citation_markers,
 )
 from rag_core.rag.context_plugins import (
     GroundingContextPlugin,
@@ -99,6 +102,7 @@ class RAGPipeline:
         toc_index: TOCIndex | None = None,
         topic_locator_front_matter_policy: TopicLocatorFrontMatterPolicy | None = None,
         topic_locator_response_mode: str = "hybrid",
+        references_max_sources: int = 3,
     ) -> None:
         self.llm = llm
         self.embedder = embedder
@@ -129,6 +133,7 @@ class RAGPipeline:
         self.toc_index = toc_index
         self.topic_locator_front_matter_policy = topic_locator_front_matter_policy or TopicLocatorFrontMatterPolicy()
         self.topic_locator_response_mode = (topic_locator_response_mode or "hybrid").strip().lower()
+        self.references_max_sources = max(1, int(references_max_sources))
 
     @staticmethod
     def _normalize_user_text(text: str) -> str:
@@ -439,19 +444,46 @@ class RAGPipeline:
             and self.topic_locator_response_mode != "llm"
             and hits
         ):
-            answer = render_topic_locator_answer(hits=hits, max_candidates=min(3, self.top_k))
-            yield {'type': 'delta', 'data': {'text': answer}}
-            references_suffix = build_references_suffix(
-                answer_markdown=answer,
-                sources=source_payload,
-            )
-            if references_suffix:
-                yield {'type': 'delta', 'data': {'text': references_suffix}}
+            raw_answer = render_topic_locator_answer(hits=hits, max_candidates=min(3, self.top_k))
+            cleaned_answer = strip_inline_citation_markers(raw_answer)
+            if cleaned_answer:
+                yield {'type': 'delta', 'data': {'text': cleaned_answer}}
+            if source_payload:
+                selected_sources, strategy = select_reference_sources_for_answer(
+                    raw_answer=raw_answer,
+                    cleaned_answer=cleaned_answer,
+                    sources=source_payload,
+                    max_sources=self.references_max_sources,
+                )
+                yield {
+                    'type': 'references',
+                    'data': {
+                        'sources': selected_sources,
+                        'strategy': strategy,
+                        'answer_has_references_heading': answer_includes_references_heading(raw_answer),
+                    },
+                }
             return
 
         if self._should_retrieve(intent) and retrieval_assessment is not None and retrieval_assessment.weak:
-            for token in self._confidence_fallback_response().split(' '):
+            raw_answer = self._confidence_fallback_response()
+            for token in raw_answer.split(' '):
                 yield {'type': 'delta', 'data': {'text': token + ' '}}
+            if source_payload:
+                selected_sources, strategy = select_reference_sources_for_answer(
+                    raw_answer=raw_answer,
+                    cleaned_answer=raw_answer,
+                    sources=source_payload,
+                    max_sources=self.references_max_sources,
+                )
+                yield {
+                    'type': 'references',
+                    'data': {
+                        'sources': selected_sources,
+                        'strategy': strategy,
+                        'answer_has_references_heading': answer_includes_references_heading(raw_answer),
+                    },
+                }
             return
 
         resolved_max_new_tokens, resolved_temperature = self.resolve_generation_params(
@@ -489,7 +521,9 @@ class RAGPipeline:
                 task_directive=task_directive,
                 corpus_version=self.corpus_version,
             )
-        generated_chunks: list[str] = []
+        raw_chunks: list[str] = []
+        cleaned_chunks: list[str] = []
+        stripper = InlineCitationStripper()
         for token in self.llm.stream_chat(
             messages=request.messages,
             system_prompt=system_prompt,
@@ -497,12 +531,31 @@ class RAGPipeline:
             temperature=resolved_temperature,
             attachments=request.attachments,
         ):
-            generated_chunks.append(token)
-            yield {'type': 'delta', 'data': {'text': token}}
-        if self._should_retrieve(intent):
-            references_suffix = build_references_suffix(
-                answer_markdown=''.join(generated_chunks),
+            raw_chunks.append(token)
+            cleaned_piece = stripper.feed(token)
+            if cleaned_piece:
+                cleaned_chunks.append(cleaned_piece)
+                yield {'type': 'delta', 'data': {'text': cleaned_piece}}
+
+        tail = stripper.flush()
+        if tail:
+            cleaned_chunks.append(tail)
+            yield {'type': 'delta', 'data': {'text': tail}}
+
+        if self._should_retrieve(intent) and source_payload:
+            raw_answer = ''.join(raw_chunks)
+            cleaned_answer = ''.join(cleaned_chunks)
+            selected_sources, strategy = select_reference_sources_for_answer(
+                raw_answer=raw_answer,
+                cleaned_answer=cleaned_answer,
                 sources=source_payload,
+                max_sources=self.references_max_sources,
             )
-            if references_suffix:
-                yield {'type': 'delta', 'data': {'text': references_suffix}}
+            yield {
+                'type': 'references',
+                'data': {
+                    'sources': selected_sources,
+                    'strategy': strategy,
+                    'answer_has_references_heading': answer_includes_references_heading(raw_answer),
+                },
+            }

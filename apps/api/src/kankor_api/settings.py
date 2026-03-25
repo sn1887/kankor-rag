@@ -52,6 +52,7 @@ class Settings(BaseSettings):
         alias='RAG_PDF_WINDOW_MAX_PAGES_PER_ATTACHMENT',
     )
     rag_top_k: int = Field(default=5, alias='RAG_TOP_K')
+    rag_references_max_sources: int = Field(default=3, alias='RAG_REFERENCES_MAX_SOURCES')
     rag_min_score: float = Field(default=0.15, alias='RAG_MIN_SCORE')
     rag_local_expansion_neighbors: int = Field(default=1, alias='RAG_LOCAL_EXPANSION_NEIGHBORS')
     rag_retrieval_confidence_top_score: float = Field(default=0.27, alias='RAG_RETRIEVAL_CONFIDENCE_TOP_SCORE')

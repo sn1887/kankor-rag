@@ -12,5 +12,4 @@ def test_grounded_chat_messages_include_citation_fewshot_block() -> None:
         intent="grounded_textbook",
     )
     assert messages
-    assert "نمونهٔ کوتاهِ ارجاع" in messages[-1].content
-
+    assert "نمونهٔ کوتاهِ سبک پاسخ" in messages[-1].content

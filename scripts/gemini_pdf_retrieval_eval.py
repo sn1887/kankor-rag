@@ -180,7 +180,7 @@ DEFAULT_API_QUERIES: list[dict[str, Any]] = [
 
 
 NON_GROUNDED_INTENTS = {"smalltalk", "greeting", "study_coach", "direct_solver"}
-REFERENCE_HEADING_PATTERN = re.compile(r"(?im)^\s{0,3}#{1,6}\s*(references|sources)\b")
+REFERENCE_HEADING_PATTERN = re.compile(r"(?im)^\s{0,3}#{1,6}\s*(references|sources|منابع)\s*:?\s*$")
 CITATION_BADGE_PATTERN = re.compile(r"\[(S\d+)(?:[^\]]*)\]", re.IGNORECASE)
 
 
@@ -1041,8 +1041,8 @@ def _audit_citations(
         issues.append("api_error")
     if citation_required and not sources:
         issues.append("no_sources_for_grounded_query")
-    if citation_required and sources and not inline_badges:
-        issues.append("missing_inline_citations")
+    if citation_required and inline_badges:
+        issues.append("unexpected_inline_citations")
     if citation_required and not references:
         issues.append("missing_references_section")
     if unknown_badges:

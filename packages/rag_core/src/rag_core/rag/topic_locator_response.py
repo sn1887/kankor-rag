@@ -40,7 +40,7 @@ def render_topic_locator_answer(*, hits: Sequence[Hit], max_candidates: int = 3)
     """Deterministic topic-locator response.
 
     This avoids calling the LLM for locator-style queries; citations are inserted by construction.
-    The caller is expected to append the References section via build_references_suffix().
+    The caller is expected to append a References section separately.
     """
     if not hits:
         return ""
@@ -74,9 +74,7 @@ def render_topic_locator_answer(*, hits: Sequence[Hit], max_candidates: int = 3)
         else:
             label = chapter_title or hit.document.id
 
-        cite_page = start_page or _coerce_positive_int(meta.get("page")) or end_page
-        citation = f"[S{idx}]" if cite_page is None else f"[S{idx} p.{cite_page}]"
-        lines.append(f"{idx}. **{label}** ({page_span}). {citation}")
+        lines.append(f"{idx}. **{label}** ({page_span}).")
         if snippet and snippet != chapter_title:
             lines.append(f"   متن مرتبط: {snippet}")
 
