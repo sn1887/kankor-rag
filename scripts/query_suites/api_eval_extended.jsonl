@@ -1,5 +1,5 @@
 {"id":"ps_grounded_motion_ps","language":"ps","intent":"grounded_textbook","query":"د حرکت يو بعدي او دوه بعدي حرکت تر منځ توپير په لنډ ډول تشريح کړه.","citation_required":true,"expected_subjects":["physics"]}
 {"id":"oos_kankor_results_1402_fa","language":"fa","intent":"grounded_textbook","query":"نتایج کانکور ۱۴۰۲ چیست؟","citation_required":false}
-{"id":"islam_peace_fa","language":"fa","intent":"grounded_textbook","query":"صلح در اسلام چیست؟","citation_required":true,"expected_subjects":["islamic_studies"]}
-{"id":"islam_tajassus_fa","language":"fa","intent":"grounded_textbook","query":"تجسس چیست؟","citation_required":true,"expected_subjects":["islamic_studies"]}
+{"id":"islam_peace_fa","language":"fa","intent":"grounded_textbook","query":"صلح در اسلام چیست؟","citation_required":true,"expected_subjects":["tafseer","islamic_studies"]}
+{"id":"islam_tajassus_fa","language":"fa","intent":"grounded_textbook","query":"تجسس چیست؟","citation_required":true,"expected_subjects":["tafseer","islamic_studies"]}
 {"id":"dari_baharistan_fa","language":"fa","intent":"grounded_textbook","query":"بهارستان چیست؟","citation_required":true,"expected_subjects":["dari"]}
