@@ -5,7 +5,11 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file='.env', extra='ignore', case_sensitive=False)
+    # NOTE: We intentionally do NOT auto-load a dotenv file here.
+    # Unit tests (and some production deployments) rely on a clean, explicit
+    # environment; a developer-local `.env` with secrets must not change test
+    # behavior. Runtime entrypoints call `load_settings()` to opt into dotenv.
+    model_config = SettingsConfigDict(extra='ignore', case_sensitive=False)
     backend_host: str = Field(default='127.0.0.1', alias='BACKEND_HOST')
     backend_port: int = Field(default=8000, alias='BACKEND_PORT')
     cors_allow_origins: str = Field(default='http://localhost:3000,http://127.0.0.1:3000,http://localhost:7860', alias='CORS_ALLOW_ORIGINS')
@@ -204,3 +208,15 @@ class Settings(BaseSettings):
     @property
     def resolved_whatsapp_redis_url(self) -> str | None:
         return self._first_non_empty(self.rag_whatsapp_redis_url, os.getenv('REDIS_URL'))
+
+
+def load_settings() -> Settings:
+    """Load settings, optionally reading a dotenv file.
+
+    - Uses `RAG_ENV_FILE` when set (default: `.env`).
+    - Ignores missing files (falls back to process env only).
+    """
+    env_file = (os.getenv("RAG_ENV_FILE") or ".env").strip()
+    if env_file and os.path.exists(env_file):
+        return Settings(_env_file=env_file)
+    return Settings()

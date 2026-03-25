@@ -34,7 +34,7 @@ from .compatibility import (
     resolve_expected_embedding_dimension,
     validate_index_runtime_compatibility,
 )
-from .settings import Settings
+from .settings import Settings, load_settings
 from .whatsapp.contracts import (
     ConversationStore,
     JobQueue,
@@ -513,7 +513,7 @@ def _build_whatsapp_runtime(settings: Settings, *, pipeline: RAGPipeline) -> Wha
 
 @lru_cache(maxsize=1)
 def get_app_state() -> AppState:
-    settings = Settings()
+    settings = load_settings()
     vector_store = _build_vector_store(settings)
     manifest = load_index_manifest(settings.rag_index_path)
     expected_embedding_dimension = resolve_expected_embedding_dimension(
