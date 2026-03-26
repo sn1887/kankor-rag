@@ -172,6 +172,20 @@ def test_render_references_markdown_localizes_islamic_study_jafari_title() -> No
     assert "Islamic_Study_jafari" not in rendered
 
 
+def test_render_references_markdown_localizes_tafseer_title() -> None:
+    sources = [
+        {
+            "title": "G12-Dr-Tafseer",
+            "sourceId": "G12-Dr-Tafseer",
+            "page": 12,
+            "pdfUrl": "https://example.com/tafseer.pdf#page=12",
+        }
+    ]
+    rendered = render_references_markdown(answer_markdown="پاسخ.", sources=sources)
+    assert "تفسیر صنف ۱۲، صفحه ۱۲" in rendered
+    assert "Tafseer" not in rendered
+
+
 def test_to_persian_digits_converts_all_ascii_digits() -> None:
     assert to_persian_digits(12) == "۱۲"
     assert to_persian_digits("page 203") == "page ۲۰۳"

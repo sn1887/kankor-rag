@@ -408,6 +408,12 @@ def _build_grounding_context_plugin(settings: Settings) -> GroundingContextPlugi
         return PdfWindowGroundingContextPlugin(
             max_attachments=settings.rag_pdf_window_max_attachments,
             max_pages_per_attachment=settings.rag_pdf_window_max_pages_per_attachment,
+            adaptive_enabled=settings.rag_pdf_window_adaptive_enabled,
+            adaptive_min_attachments=settings.rag_pdf_window_adaptive_min_attachments,
+            adaptive_top_score_low=settings.rag_pdf_window_adaptive_top_score_low,
+            adaptive_top_score_very_low=settings.rag_pdf_window_adaptive_top_score_very_low,
+            adaptive_score_gap_low=settings.rag_pdf_window_adaptive_score_gap_low,
+            adaptive_complexity_length_tokens=settings.rag_pdf_window_adaptive_complexity_length_tokens,
         )
     raise ValueError('Unsupported RAG context mode. Use "text" or "pdf_windows".')
 

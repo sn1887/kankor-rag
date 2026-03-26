@@ -51,6 +51,29 @@ class Settings(BaseSettings):
         default=4,
         alias='RAG_PDF_WINDOW_MAX_PAGES_PER_ATTACHMENT',
     )
+    # When enabled, pdf_windows adaptively chooses attachment count per query instead of fixed max.
+    rag_pdf_window_adaptive_enabled: bool = Field(default=False, alias='RAG_PDF_WINDOW_ADAPTIVE_ENABLED')
+    rag_pdf_window_adaptive_min_attachments: int = Field(
+        default=1,
+        alias='RAG_PDF_WINDOW_ADAPTIVE_MIN_ATTACHMENTS',
+    )
+    rag_pdf_window_adaptive_top_score_low: float = Field(
+        default=0.42,
+        alias='RAG_PDF_WINDOW_ADAPTIVE_TOP_SCORE_LOW',
+    )
+    rag_pdf_window_adaptive_top_score_very_low: float = Field(
+        default=0.30,
+        alias='RAG_PDF_WINDOW_ADAPTIVE_TOP_SCORE_VERY_LOW',
+    )
+    rag_pdf_window_adaptive_score_gap_low: float = Field(
+        # Interim post-run10 calibration; revisit after adaptive signal decontamination validation.
+        default=0.003,
+        alias='RAG_PDF_WINDOW_ADAPTIVE_SCORE_GAP_LOW',
+    )
+    rag_pdf_window_adaptive_complexity_length_tokens: int = Field(
+        default=25,
+        alias='RAG_PDF_WINDOW_ADAPTIVE_COMPLEXITY_LENGTH_TOKENS',
+    )
     rag_top_k: int = Field(default=5, alias='RAG_TOP_K')
     rag_references_max_sources: int = Field(default=3, alias='RAG_REFERENCES_MAX_SOURCES')
     rag_min_score: float = Field(default=0.15, alias='RAG_MIN_SCORE')

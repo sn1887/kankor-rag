@@ -10,6 +10,9 @@ from rag_core.contracts.embeddings import Embedder
 from rag_core.contracts.llm import LLMProvider
 from rag_core.contracts.vector_store import VectorStore
 from rag_core.rag.adaptive_retrieval import TopicLocatorFrontMatterPolicy
+from rag_core.rag.context_plugins import AdaptiveAttachmentRetrievalSignals
+from rag_core.rag.context_plugins import GroundingContextPlugin
+from rag_core.rag.context_plugins import PreparedChatRequest
 from rag_core.rag.context_plugins import PdfWindowGroundingContextPlugin
 from rag_core.rag.pipeline import RAGPipeline
 from rag_core.rag.toc_locator import TOCIndex
@@ -105,6 +108,29 @@ class DummyVectorStore(VectorStore):
     def search(self, query_vector: np.ndarray, *, top_k: int, filters=None) -> list[Hit]:
         self.search_calls += 1
         return [Hit(document=self.documents[1], score=0.99)]
+
+
+class RecordingGroundingContextPlugin(GroundingContextPlugin):
+    def __init__(self) -> None:
+        self.last_retrieval_signals: AdaptiveAttachmentRetrievalSignals | None = None
+
+    def build(
+        self,
+        *,
+        question: str,
+        history: Sequence[ChatTurn],
+        hits: Sequence[Hit],
+        grounded: bool,
+        intent: str,
+        task_directive: str,
+        corpus_version: str,
+        retrieval_signals: AdaptiveAttachmentRetrievalSignals | None = None,
+    ) -> PreparedChatRequest:
+        _ = grounded, intent, task_directive, corpus_version, hits
+        self.last_retrieval_signals = retrieval_signals
+        messages = list(history)
+        messages.append(ChatTurn(role="user", content=question))
+        return PreparedChatRequest(messages=messages)
 
 
 def _write_blank_pdf(path: Path, pages: int) -> None:
@@ -249,6 +275,82 @@ def test_stream_answer_local_expansion_adds_neighbor_sources() -> None:
     assert 6 in pages
     assert 7 in pages
     assert 8 in pages
+
+
+def test_stream_answer_captures_pre_expansion_signals_before_neighbor_expansion(monkeypatch) -> None:
+    class TwoHitStore(VectorStore):
+        def __init__(self) -> None:
+            self.search_calls = 0
+            self.documents = [
+                Document(
+                    id="doc-a",
+                    text="evidence a",
+                    metadata={
+                        "title": "G10 Biology",
+                        "subject": "biology",
+                        "language": "fa",
+                        "grade_band": "10",
+                        "source_id": "G10-Dr-Biology",
+                        "page": 7,
+                        "chunk_index": 10,
+                    },
+                ),
+                Document(
+                    id="doc-b",
+                    text="evidence b",
+                    metadata={
+                        "title": "G10 Biology",
+                        "subject": "biology",
+                        "language": "fa",
+                        "grade_band": "10",
+                        "source_id": "G10-Dr-Biology",
+                        "page": 8,
+                        "chunk_index": 11,
+                    },
+                ),
+            ]
+
+        @property
+        def size(self) -> int:
+            return len(self.documents)
+
+        def search(self, query_vector: np.ndarray, *, top_k: int, filters=None) -> list[Hit]:
+            self.search_calls += 1
+            return [
+                Hit(document=self.documents[0], score=0.90),
+                Hit(document=self.documents[1], score=0.89),
+            ]
+
+    plugin = RecordingGroundingContextPlugin()
+    llm = DummyLLM()
+    pipeline = RAGPipeline(
+        llm=llm,
+        embedder=DummyEmbedder(),
+        vector_store=TwoHitStore(),
+        corpus_version="test@1",
+        local_expansion_neighbors=1,
+        grounding_context_plugin=plugin,
+    )
+
+    def _fake_expand_local_window_hits(*, hits, vector_store, neighbors_per_side, max_hits=None):
+        _ = vector_store, neighbors_per_side, max_hits
+        assert len(hits) >= 2
+        return [
+            Hit(document=hits[0].document, score=0.90),
+            Hit(document=hits[1].document, score=0.899),
+        ]
+
+    monkeypatch.setattr(
+        "rag_core.rag.pipeline.expand_local_window_hits",
+        _fake_expand_local_window_hits,
+    )
+
+    list(pipeline.stream_answer(question="Explain photosynthesis", history=[]))
+
+    signals = plugin.last_retrieval_signals
+    assert signals is not None
+    assert signals.score_gap_pre_expansion == pytest.approx(0.01)
+    assert signals.score_gap_post_expansion == pytest.approx(0.001)
 
 
 def test_stream_answer_confidence_gate_avoids_unverified_grounding() -> None:

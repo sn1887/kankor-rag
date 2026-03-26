@@ -117,7 +117,11 @@ _SOURCE_SUBJECT_DARI_MAP = {
     "islamic study": "تعلیمات اسلامی",
     "islamic study jafari": "تعلیمات اسلامی جعفری",
     "islamic study hanafi": "تعلیمات اسلامی حنفی",
+    "islamic study tafseer": "تفسیر",
+    "islamic study tafsir": "تفسیر",
     "islam": "تعلیمات اسلامی",
+    "tafseer": "تفسیر",
+    "tafsir": "تفسیر",
 }
 
 

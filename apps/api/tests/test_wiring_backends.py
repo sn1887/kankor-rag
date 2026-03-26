@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import pytest
 
+from rag_core.rag.context_plugins import PdfWindowGroundingContextPlugin
+
 from kankor_api.settings import Settings
 from kankor_api.wiring import (
+    _build_grounding_context_plugin,
     _build_deepseek_embedder,
     _build_e5_embedder,
     _build_gemini_llm,
@@ -57,3 +60,22 @@ def test_build_whatsapp_runtime_requires_redis_url_for_redis_queue_backend(monke
     settings = Settings()
     with pytest.raises(ValueError, match="RAG_WHATSAPP_REDIS_URL"):
         _build_whatsapp_runtime(settings, pipeline=object())  # type: ignore[arg-type]
+
+
+def test_build_grounding_context_plugin_loads_pdf_window_adaptive_settings(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_CONTEXT_MODE", "pdf_windows")
+    monkeypatch.setenv("RAG_PDF_WINDOW_ADAPTIVE_ENABLED", "true")
+    monkeypatch.setenv("RAG_PDF_WINDOW_ADAPTIVE_MIN_ATTACHMENTS", "2")
+    monkeypatch.setenv("RAG_PDF_WINDOW_ADAPTIVE_TOP_SCORE_LOW", "0.5")
+    monkeypatch.setenv("RAG_PDF_WINDOW_ADAPTIVE_TOP_SCORE_VERY_LOW", "0.25")
+    monkeypatch.setenv("RAG_PDF_WINDOW_ADAPTIVE_SCORE_GAP_LOW", "0.04")
+    monkeypatch.setenv("RAG_PDF_WINDOW_ADAPTIVE_COMPLEXITY_LENGTH_TOKENS", "30")
+    settings = Settings()
+    plugin = _build_grounding_context_plugin(settings)
+    assert isinstance(plugin, PdfWindowGroundingContextPlugin)
+    assert plugin.adaptive_enabled is True
+    assert plugin.adaptive_min_attachments == 2
+    assert plugin.adaptive_top_score_low == 0.5
+    assert plugin.adaptive_top_score_very_low == 0.25
+    assert plugin.adaptive_score_gap_low == 0.04
+    assert plugin.adaptive_complexity_length_tokens == 30

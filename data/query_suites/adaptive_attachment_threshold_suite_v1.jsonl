@@ -1,0 +1,65 @@
+{"id":"A1","category":"A","intent":"grounded_textbook","query":"میتوکندری در حجره چه وظیفه دارد؟","expected_count":1}
+{"id":"A2","category":"A","intent":"grounded_textbook","query":"فتوسنتیز در کدام قسمت نبات صورت میگیرد؟","expected_count":1}
+{"id":"A3","category":"A","intent":"grounded_textbook","query":"قانون اول نیوتن را بیان کنید.","expected_count":1}
+{"id":"A4","category":"A","intent":"grounded_textbook","query":"فورمول مساحت دایره چیست؟","expected_count":1}
+{"id":"A5","category":"A","intent":"grounded_textbook","query":"جدول تناوبی توسط کی اختراع شد؟","expected_count":1}
+{"id":"A6","category":"A","intent":"grounded_textbook","query":"اکسیجن دارای چند الکترون در قشر خارجی است؟","expected_count":1}
+{"id":"A7","category":"A","intent":"grounded_textbook","query":"مری در بدن انسان کجا موقعیت دارد؟","expected_count":1}
+{"id":"A8","category":"A","intent":"grounded_textbook","query":"امیر عبدالرحمن خان در کدام سال به قدرت رسید؟","expected_count":1}
+{"id":"A9","category":"A","intent":"grounded_textbook","query":"نماز جمعه چه حکم دارد؟","expected_count":1}
+{"id":"A10","category":"A","intent":"grounded_textbook","query":"دریای آمو در کجا موقعیت دارد؟","expected_count":1}
+{"id":"A11","category":"A","intent":"grounded_textbook","query":"طویل ترین سوره قرآن کریم کدام است؟","expected_count":1}
+{"id":"A12","category":"A","intent":"grounded_textbook","query":"DNA در کجای حجره موجود است؟","expected_count":1}
+{"id":"A13","category":"A","intent":"grounded_textbook","query":"سرعت صوت در هوا چند متر فی ثانیه است؟","expected_count":1}
+{"id":"A14","category":"A","intent":"grounded_textbook","query":"H₂O فورمول کیمیاوی کدام مرکب است؟","expected_count":1}
+{"id":"A15","category":"A","intent":"grounded_textbook","query":"کابل پایتخت کدام کشور است؟","expected_count":1}
+{"id":"B1","category":"B","intent":"grounded_textbook","query":"هورمون انسولین چه تأثیری بر بدن دارد و از کجا ترشح میشود؟","expected_count":2}
+{"id":"B2","category":"B","intent":"grounded_textbook","query":"عناصر فلزی چه خصوصیاتی دارند؟","expected_count":2}
+{"id":"B3","category":"B","intent":"grounded_textbook","query":"موج صوتی چگونه منتقل میشود؟","expected_count":2}
+{"id":"B4","category":"B","intent":"grounded_textbook","query":"در افغانستان کدام صنایع وجود دارد؟","expected_count":2}
+{"id":"B5","category":"B","intent":"grounded_textbook","query":"اثرات جنگ های داخلی بر اقتصاد افغانستان چه بود؟","expected_count":2}
+{"id":"B6","category":"B","intent":"grounded_textbook","query":"تنفس هوازی چه مراحلی دارد؟","expected_count":2}
+{"id":"B7","category":"B","intent":"grounded_textbook","query":"نیرو و انرژی چه رابطه‌ای با هم دارند؟","expected_count":2}
+{"id":"B8","category":"B","intent":"grounded_textbook","query":"زکات بر چه اموالی واجب است؟","expected_count":2}
+{"id":"B9","category":"B","intent":"grounded_textbook","query":"گروپ بندی خون در انسان چیست؟","expected_count":2}
+{"id":"B10","category":"B","intent":"grounded_textbook","query":"محصولات زراعتی مهم افغانستان کدام‌ها هستند؟","expected_count":2}
+{"id":"B11","category":"B","intent":"grounded_textbook","query":"الکترولیز چیست و در کجا استفاده میشود؟","expected_count":2}
+{"id":"B12","category":"B","intent":"grounded_textbook","query":"دوره امانی چه تغییراتی در افغانستان آورد؟","expected_count":2}
+{"id":"B13","category":"B","intent":"grounded_textbook","query":"مثلث متساوی الاضلاع چه خصوصیاتی دارد؟","expected_count":2}
+{"id":"B14","category":"B","intent":"grounded_textbook","query":"شاهراه ابریشم از کجا میگذشت؟","expected_count":2}
+{"id":"B15","category":"B","intent":"grounded_textbook","query":"وراثت چگونه از والدین به اولاد منتقل میشود؟","expected_count":2}
+{"id":"C1","category":"C","intent":"grounded_textbook","query":"تفاوت بین میتوز و میوز را توضیح دهید.","expected_count":3}
+{"id":"C2","category":"C","intent":"grounded_textbook","query":"فرق بین اسید و قاعده چیست و مقایسه کنید.","expected_count":3}
+{"id":"C3","category":"C","intent":"grounded_textbook","query":"تفاوت بین موج طولی و موج عرضی را با مثال بیان کنید.","expected_count":3}
+{"id":"C4","category":"C","intent":"grounded_textbook","query":"نقش هورمون‌ها و آنزیم‌ها را در بدن مقایسه کنید.","expected_count":3}
+{"id":"C5","category":"C","intent":"grounded_textbook","query":"فرق بین دموکراسی و استبداد چیست؟","expected_count":3}
+{"id":"C6","category":"C","intent":"grounded_textbook","query":"تفاوت بین جنگ اول و دوم افغان-انگلیس را بیان کنید.","expected_count":3}
+{"id":"C7","category":"C","intent":"grounded_textbook","query":"مقایسه کنید بین اقلیم شمال و جنوب افغانستان.","expected_count":3}
+{"id":"C8","category":"C","intent":"grounded_textbook","query":"وضع اقتصادی و اجتماعی افغانستان در دوره امانی و دوره محمد ظاهر شاه با هم فرق دارد؟","expected_count":3}
+{"id":"C9","category":"C","intent":"grounded_textbook","query":"انواع پیوند کیمیاوی را توضیح داده مقایسه کنید.","expected_count":3}
+{"id":"C10","category":"C","intent":"grounded_textbook","query":"تفاوت بین نماز واجب، فرض و سنت چیست؟","expected_count":3}
+{"id":"C11","category":"C","intent":"grounded_textbook","query":"نقش هم کاربن و هم اکسیجن را در چرخه حیات بیان کنید.","expected_count":3}
+{"id":"C12","category":"C","intent":"grounded_textbook","query":"انواع حکومت‌های افغانستان از ۱۹۱۹ تا ۱۹۷۸ را بیان و مقایسه کنید.","expected_count":3}
+{"id":"C13","category":"C","intent":"grounded_textbook","query":"تفاوت بین معادلات خطی و درجه دوم را با مثال توضیح دهید.","expected_count":3}
+{"id":"C14","category":"C","intent":"grounded_textbook","query":"علاوه بر اثرات محیط زیستی، آلودگی هوا چه اثراتی بر صحت انسان و حیوانات دارد؟","expected_count":3}
+{"id":"C15","category":"C","intent":"grounded_textbook","query":"دلایل شکست امپراتوری مغول در افغانستان و تأثیر آن بر فرهنگ را بیان کنید.","expected_count":3}
+{"id":"C16","category":"C","intent":"grounded_textbook","query":"چند نوع واکنش کیمیاوی وجود دارد؟ هر نوع را توضیح و مقایسه کنید.","expected_count":3}
+{"id":"C17","category":"C","intent":"grounded_textbook","query":"فرق بین شریعت اسلامی در زمینه تجارت و معاملات روزمره چیست؟","expected_count":3}
+{"id":"C18","category":"C","intent":"grounded_textbook","query":"سیستم گردش خون و سیستم تنفسی چگونه با هم همکاری میکنند؟","expected_count":3}
+{"id":"C19","category":"C","intent":"grounded_textbook","query":"تفاوت عناصر دوره دوم و سوم جدول تناوبی را بیان کنید.","expected_count":3}
+{"id":"C20","category":"C","intent":"grounded_textbook","query":"انواع نیروهای فزیکی را نام برده و تفاوت آن‌ها را توضیح دهید.","expected_count":3}
+{"id":"D1","category":"D","intent":"grounded_textbook","query":"میتوکندری چه ساختاری دارد، از کدام اجزا تشکیل شده و چگونه ATP تولید میکند؟","expected_count":1}
+{"id":"D2","category":"D","intent":"grounded_textbook","query":"قانون دوم نیوتن را کاملاً توضیح دهید و فورمول آن را بنویسید.","expected_count":1}
+{"id":"D3","category":"D","intent":"grounded_textbook","query":"مراحل تقسیم میتوز را به ترتیب از اول تا آخر توضیح دهید.","expected_count":1}
+{"id":"D4","category":"D","intent":"grounded_textbook","query":"نماز پنج وقت به ترتیب نام ببرید و تعداد رکعت هر یک را بنویسید.","expected_count":1}
+{"id":"D5","category":"D","intent":"grounded_textbook","query":"فورمول محاسبه حجم کره و سطح آن را بنویسید و توضیح دهید.","expected_count":1}
+{"id":"D6","category":"D","intent":"grounded_textbook","query":"ساختار اتم را با ذکر پروتون، نیوترون و الکترون کاملاً شرح دهید.","expected_count":1}
+{"id":"D7","category":"D","intent":"grounded_textbook","query":"احمد شاه درانی چه کسی بود و چه دستاوردهایی داشت؟","expected_count":1}
+{"id":"D8","category":"D","intent":"grounded_textbook","query":"مراحل رشد جنین انسان از لقاح تا تولد را توضیح دهید.","expected_count":1}
+{"id":"D9","category":"D","intent":"grounded_textbook","query":"جمع و تفریق اعداد کسری را با مثال کامل توضیح دهید.","expected_count":1}
+{"id":"D10","category":"D","intent":"grounded_textbook","query":"کوه‌های هندوکش در کجا موقعیت دارند و چه اهمیتی دارند؟","expected_count":1}
+{"id":"E1","category":"E","intent":"grounded_textbook","query":"تئوری کوانتم رنگ در فزیک ذرات چیست؟","expected_count":{"min":0,"max":1},"allow_zero_hits":true}
+{"id":"E2","category":"E","intent":"grounded_textbook","query":"الف","expected_count":{"min":0,"max":1},"allow_zero_hits":true}
+{"id":"E3","category":"E","intent":"grounded_textbook","query":"تاریخ افغانستان","expected_count":{"min":2,"max":3}}
+{"id":"E4","category":"E","intent":"grounded_textbook","query":"چه فرقی بین نبات و حیوان وجود دارد؟","expected_count":3}
+{"id":"E5","category":"E","intent":"greeting","query":"سلام","expected_count":{"min":0,"max":1},"allow_zero_hits":true}

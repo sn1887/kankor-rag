@@ -26,6 +26,7 @@ from rag_core.rag.citations import (
     strip_inline_citation_markers,
 )
 from rag_core.rag.context_plugins import (
+    AdaptiveAttachmentRetrievalSignals,
     GroundingContextPlugin,
     TextGroundingContextPlugin,
 )
@@ -262,6 +263,25 @@ class RAGPipeline:
         return "I can give general guidance, but I could not verify this from the textbooks."
 
     @staticmethod
+    def _resolve_top_score(hits: Sequence[Hit]) -> float | None:
+        if not hits:
+            return None
+        try:
+            return float(hits[0].score)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _resolve_score_gap(cls, hits: Sequence[Hit]) -> float | None:
+        if len(hits) < 2:
+            return None
+        top_score = cls._resolve_top_score(hits[:1])
+        second_score = cls._resolve_top_score(hits[1:2])
+        if top_score is None or second_score is None:
+            return None
+        return top_score - second_score
+
+    @staticmethod
     def _should_retrieve(intent: RAGIntent) -> bool:
         return intent in RETRIEVAL_INTENTS
 
@@ -325,6 +345,7 @@ class RAGPipeline:
             return
 
         retrieval_assessment: RetrievalAssessment | None = None
+        adaptive_retrieval_signals: AdaptiveAttachmentRetrievalSignals | None = None
         hits: list[Hit] = []
         if self._should_retrieve(intent):
             queries = route.retrieval_queries or [question]
@@ -396,12 +417,21 @@ class RAGPipeline:
                         front_matter_policy=self.topic_locator_front_matter_policy,
                     )
             if self._should_expand_neighbors(intent):
-                hits = expand_local_window_hits(
+                pre_expansion_top_score = self._resolve_top_score(hits)
+                pre_expansion_score_gap = self._resolve_score_gap(hits)
+                expanded_hits = expand_local_window_hits(
                     hits=hits,
                     vector_store=self.vector_store,
                     neighbors_per_side=self.local_expansion_neighbors,
                     max_hits=self.top_k + (self.local_expansion_neighbors * 2),
                 )
+                adaptive_retrieval_signals = AdaptiveAttachmentRetrievalSignals(
+                    top_score_pre_expansion=pre_expansion_top_score,
+                    score_gap_pre_expansion=pre_expansion_score_gap,
+                    top_score_post_expansion=self._resolve_top_score(expanded_hits),
+                    score_gap_post_expansion=self._resolve_score_gap(expanded_hits),
+                )
+                hits = expanded_hits
             retrieval_assessment = assess_retrieval_confidence(
                 hits=hits,
                 min_top_score=self.retrieval_confidence_top_score,
@@ -510,6 +540,7 @@ class RAGPipeline:
             intent=intent.value,
             task_directive=task_directive,
             corpus_version=self.corpus_version,
+            retrieval_signals=adaptive_retrieval_signals,
         )
         if request.attachments and not self.llm.supports_attachments:
             request = TextGroundingContextPlugin().build(
@@ -520,6 +551,7 @@ class RAGPipeline:
                 intent=intent.value,
                 task_directive=task_directive,
                 corpus_version=self.corpus_version,
+                retrieval_signals=adaptive_retrieval_signals,
             )
         raw_chunks: list[str] = []
         cleaned_chunks: list[str] = []
