@@ -3,6 +3,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+    restart: unless-stopped
     environment:
       RAG_UI_INTERFACE: openwebui
       BACKEND_HOST: 0.0.0.0
@@ -45,21 +46,35 @@ services:
       RAG_PDF_WINDOW_ADAPTIVE_MIN_ATTACHMENTS: ${RAG_PDF_WINDOW_ADAPTIVE_MIN_ATTACHMENTS:-1}
       RAG_PDF_WINDOW_ADAPTIVE_TOP_SCORE_LOW: ${RAG_PDF_WINDOW_ADAPTIVE_TOP_SCORE_LOW:-0.42}
       RAG_PDF_WINDOW_ADAPTIVE_TOP_SCORE_VERY_LOW: ${RAG_PDF_WINDOW_ADAPTIVE_TOP_SCORE_VERY_LOW:-0.30}
-      RAG_PDF_WINDOW_ADAPTIVE_SCORE_GAP_LOW: ${RAG_PDF_WINDOW_ADAPTIVE_SCORE_GAP_LOW:-0.05}
+      RAG_PDF_WINDOW_ADAPTIVE_SCORE_GAP_LOW: ${RAG_PDF_WINDOW_ADAPTIVE_SCORE_GAP_LOW:-0.003}
       RAG_PDF_WINDOW_ADAPTIVE_COMPLEXITY_LENGTH_TOKENS: ${RAG_PDF_WINDOW_ADAPTIVE_COMPLEXITY_LENGTH_TOKENS:-25}
+      RAG_USE_V6_RETRIEVAL: ${RAG_USE_V6_RETRIEVAL:-false}
+      RAG_V6_PAGE_LOCALIZATION_MIN_CONFIDENCE: ${RAG_V6_PAGE_LOCALIZATION_MIN_CONFIDENCE:-0.4}
 
     volumes:
       - ../data:/app/data:ro
       - ../apps/api:/app/apps/api:ro
       - ../packages:/app/packages:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
     ports:
-      - '8000:8000'
+      - '127.0.0.1:8000:8000'
 
   api-whatsapp:
     profiles: ["whatsapp-local"]
     build:
       context: ..
       dockerfile: Dockerfile
+    restart: unless-stopped
     depends_on:
       redis:
         condition: service_healthy
@@ -125,22 +140,36 @@ services:
       RAG_PDF_WINDOW_ADAPTIVE_MIN_ATTACHMENTS: ${RAG_PDF_WINDOW_ADAPTIVE_MIN_ATTACHMENTS:-1}
       RAG_PDF_WINDOW_ADAPTIVE_TOP_SCORE_LOW: ${RAG_PDF_WINDOW_ADAPTIVE_TOP_SCORE_LOW:-0.42}
       RAG_PDF_WINDOW_ADAPTIVE_TOP_SCORE_VERY_LOW: ${RAG_PDF_WINDOW_ADAPTIVE_TOP_SCORE_VERY_LOW:-0.30}
-      RAG_PDF_WINDOW_ADAPTIVE_SCORE_GAP_LOW: ${RAG_PDF_WINDOW_ADAPTIVE_SCORE_GAP_LOW:-0.05}
+      RAG_PDF_WINDOW_ADAPTIVE_SCORE_GAP_LOW: ${RAG_PDF_WINDOW_ADAPTIVE_SCORE_GAP_LOW:-0.003}
       RAG_PDF_WINDOW_ADAPTIVE_COMPLEXITY_LENGTH_TOKENS: ${RAG_PDF_WINDOW_ADAPTIVE_COMPLEXITY_LENGTH_TOKENS:-25}
+      RAG_USE_V6_RETRIEVAL: ${RAG_USE_V6_RETRIEVAL:-false}
+      RAG_V6_PAGE_LOCALIZATION_MIN_CONFIDENCE: ${RAG_V6_PAGE_LOCALIZATION_MIN_CONFIDENCE:-0.4}
 
     volumes:
       - ../data:/app/data:ro
       - ../apps/api:/app/apps/api:ro
       - ../packages:/app/packages:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
     ports:
-      - '8100:8000'
+      - '127.0.0.1:8100:8000'
 
   redis:
     image: redis:7-alpine
     profiles: ["whatsapp-local"]
+    restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - '6379:6379'
+      - '127.0.0.1:6379:6379'
     volumes:
       - redis-data:/data
     healthcheck:
@@ -148,9 +177,15 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   openwebui:
     image: ghcr.io/open-webui/open-webui:main
+    restart: unless-stopped
     depends_on:
       - api
     environment:
@@ -160,7 +195,12 @@ services:
       OPENAI_API_KEY: ${RAG_OPENAI_COMPAT_API_KEY:-changeme}
       OPENAI_API_KEYS: ${RAG_OPENAI_COMPAT_API_KEY:-changeme}
     ports:
-      - '3000:8080'
+      - '127.0.0.1:3000:8080'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
     volumes:
       - openwebui-data:/app/backend/data
 

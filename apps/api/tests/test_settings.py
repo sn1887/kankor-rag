@@ -119,3 +119,15 @@ def test_pdf_window_adaptive_settings_are_loaded(monkeypatch) -> None:
     assert settings.rag_pdf_window_adaptive_top_score_very_low == 0.25
     assert settings.rag_pdf_window_adaptive_score_gap_low == 0.04
     assert settings.rag_pdf_window_adaptive_complexity_length_tokens == 30
+
+
+def test_v6_retrieval_flag_is_loaded(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_USE_V6_RETRIEVAL", "true")
+    settings = Settings()
+    assert settings.rag_use_v6_retrieval is True
+
+
+def test_v6_page_localization_min_confidence_is_loaded(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_V6_PAGE_LOCALIZATION_MIN_CONFIDENCE", "0.41")
+    settings = Settings()
+    assert settings.rag_v6_page_localization_min_confidence == 0.41

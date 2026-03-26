@@ -77,6 +77,13 @@ class Settings(BaseSettings):
     )
     rag_top_k: int = Field(default=5, alias='RAG_TOP_K')
     rag_references_max_sources: int = Field(default=3, alias='RAG_REFERENCES_MAX_SOURCES')
+    # Feature flag for hybrid retrieval v6 (dense + lexical + fusion + decision). Keep off by default.
+    rag_use_v6_retrieval: bool = Field(default=False, alias='RAG_USE_V6_RETRIEVAL')
+    # v6-only: minimum confidence required to localize to a page; if below this, v6 abstains/asks for clarification.
+    rag_v6_page_localization_min_confidence: float = Field(
+        default=0.4,
+        alias="RAG_V6_PAGE_LOCALIZATION_MIN_CONFIDENCE",
+    )
     rag_min_score: float = Field(default=0.15, alias='RAG_MIN_SCORE')
     rag_local_expansion_neighbors: int = Field(default=1, alias='RAG_LOCAL_EXPANSION_NEIGHBORS')
     rag_retrieval_confidence_top_score: float = Field(default=0.27, alias='RAG_RETRIEVAL_CONFIDENCE_TOP_SCORE')

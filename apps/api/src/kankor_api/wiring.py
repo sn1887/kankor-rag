@@ -27,6 +27,7 @@ from rag_core.rag.context_plugins import (
 )
 from rag_core.rag.intent_router import DirectSolverPolicy, IntentRouter
 from rag_core.rag.pipeline import RAGPipeline
+from rag_core.rag.retrieval_reliability import build_default_retrieval_stack
 from rag_core.rag.toc_locator import TOCIndex
 
 from .compatibility import (
@@ -536,6 +537,17 @@ def get_app_state() -> AppState:
         embedder=embedder,
         manifest=manifest,
     )
+    v6_query_context_builder = None
+    v6_retrieval_pipeline = None
+    if settings.rag_use_v6_retrieval:
+        v6_query_context_builder, v6_retrieval_pipeline = build_default_retrieval_stack(
+            embedder=embedder,
+            vector_store=vector_store,
+            toc_index=toc_index,
+            top_k=settings.rag_top_k,
+            trace_enabled=True,
+            page_localization_min_confidence=settings.rag_v6_page_localization_min_confidence,
+        )
     pipeline = RAGPipeline(
         llm=llm,
         embedder=embedder,
@@ -573,6 +585,9 @@ def get_app_state() -> AppState:
         source_pdf_url_template=settings.rag_source_pdf_url_template,
         references_max_sources=settings.rag_references_max_sources,
         grounding_context_plugin=_build_grounding_context_plugin(settings),
+        use_v6_retrieval=settings.rag_use_v6_retrieval,
+        v6_query_context_builder=v6_query_context_builder,
+        v6_retrieval_pipeline=v6_retrieval_pipeline,
     )
     whatsapp_runtime = _build_whatsapp_runtime(settings, pipeline=pipeline)
     return AppState(settings=settings, pipeline=pipeline, whatsapp=whatsapp_runtime)

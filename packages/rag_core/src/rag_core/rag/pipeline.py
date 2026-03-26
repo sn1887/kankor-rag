@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+import logging
 import re
 
 import numpy as np
@@ -38,6 +39,16 @@ from rag_core.rag.prompts import (
 from rag_core.rag.toc_locator import TOCIndex
 from rag_core.rag.topic_locator_response import render_topic_locator_answer
 from rag_core.types import ChatTurn, Hit
+from rag_core.util.asyncio_runner import run_coro_sync
+from rag_core.util.timers import timed
+
+from rag_core.rag.retrieval_reliability import (
+    QueryContextBuilder,
+    RetrievalPipeline as V6RetrievalPipeline,
+    localization_decision_to_hits,
+)
+
+logger = logging.getLogger(__name__)
 
 
 _GREETING_PHRASES = {
@@ -104,6 +115,9 @@ class RAGPipeline:
         topic_locator_front_matter_policy: TopicLocatorFrontMatterPolicy | None = None,
         topic_locator_response_mode: str = "hybrid",
         references_max_sources: int = 3,
+        use_v6_retrieval: bool = False,
+        v6_query_context_builder: QueryContextBuilder | None = None,
+        v6_retrieval_pipeline: V6RetrievalPipeline | None = None,
     ) -> None:
         self.llm = llm
         self.embedder = embedder
@@ -135,6 +149,9 @@ class RAGPipeline:
         self.topic_locator_front_matter_policy = topic_locator_front_matter_policy or TopicLocatorFrontMatterPolicy()
         self.topic_locator_response_mode = (topic_locator_response_mode or "hybrid").strip().lower()
         self.references_max_sources = max(1, int(references_max_sources))
+        self.use_v6_retrieval = bool(use_v6_retrieval)
+        self.v6_query_context_builder = v6_query_context_builder
+        self.v6_retrieval_pipeline = v6_retrieval_pipeline
 
     @staticmethod
     def _normalize_user_text(text: str) -> str:
@@ -349,73 +366,150 @@ class RAGPipeline:
         hits: list[Hit] = []
         if self._should_retrieve(intent):
             queries = route.retrieval_queries or [question]
-            toc_hits: list[Hit] = []
-            toc_route: Hit | None = None
-            toc_short_circuit = False
-            if self.toc_index is not None:
-                if intent == RAGIntent.TOPIC_LOCATOR:
-                    toc_hits = self.toc_index.search(question=question, top_k=self.top_k)
-                elif intent in {RAGIntent.GROUNDED_TEXTBOOK, RAGIntent.PRACTICE_GENERATION}:
-                    # Always consult the TOC for grounded intents. Many lesson/topic titles only exist
-                    # in the manifest (not in window-text chunks), so TOC routing is a retrieval-quality win.
-                    toc_hits = self.toc_index.search(question=question, top_k=self.top_k)
-                toc_route = self._select_unambiguous_toc_route(toc_hits)
+            if (
+                self.use_v6_retrieval
+                and self.v6_query_context_builder is not None
+                and self.v6_retrieval_pipeline is not None
+                and intent in {RAGIntent.GROUNDED_TEXTBOOK, RAGIntent.PRACTICE_GENERATION}
+            ):
+                with timed() as elapsed:
+                    ctx = self.v6_query_context_builder.build(question)
+                    decision = run_coro_sync(self.v6_retrieval_pipeline.run(ctx))
 
-            if intent == RAGIntent.TOPIC_LOCATOR and toc_route is not None:
-                toc_short_circuit = True
-                hits = list(toc_hits)[: max(1, int(self.top_k))]
-            elif toc_route is not None and intent in {RAGIntent.GROUNDED_TEXTBOOK, RAGIntent.PRACTICE_GENERATION}:
-                route_meta = toc_route.document.metadata
-                source_id = str(route_meta.get("source_id", "")).strip()
-                span_start = self._coerce_positive_int(route_meta.get("start_page")) or self._coerce_positive_int(
-                    route_meta.get("page")
+                trace = getattr(decision, "trace", None)
+                logger.debug(
+                    "v6_retrieval_decision %s",
+                    {
+                        "intent": intent.value,
+                        "abstained": bool(decision.abstained),
+                        "confidence": float(decision.confidence),
+                        "latency_ms": int(elapsed() * 1000),
+                        "reranker_degraded": bool(decision.reranker_degraded),
+                        "reason_flags": list(getattr(trace, "reason_flags", ()) or ()),
+                        "dense_timeout": bool(getattr(trace, "dense_timeout", False)),
+                        "lexical_timeout": bool(getattr(trace, "lexical_timeout", False)),
+                        "reranker_timeout": bool(getattr(trace, "reranker_timeout", False)),
+                    },
                 )
-                span_end = self._coerce_positive_int(route_meta.get("end_page")) or span_start
-                filters = {"source_id": source_id} if source_id else None
-                page_span = (span_start, span_end) if span_start and span_end else None
 
-                hits = self.retrieve_many(
-                    queries,
-                    filters=filters,
-                    page_span=page_span,
-                )
-                # If the chapter span is mismatched or too narrow, fall back to the full book.
-                if not hits and filters is not None:
+                if decision.abstained:
+                    yield {'type': 'sources', 'data': []}
+                    yield {
+                        'type': 'delta',
+                        'data': {
+                            'text': decision.clarification_prompt or "نتیجه‌ای یافت نشد.",
+                        },
+                    }
+                    return
+
+                toc_candidate = None
+                for candidate in decision.top_candidates:
+                    if str(candidate.metadata.get("source_type", "")).strip().lower() != "toc_manifest":
+                        continue
+                    if toc_candidate is None or float(candidate.score) > float(toc_candidate.score):
+                        toc_candidate = candidate
+
+                use_toc_route = False
+                if toc_candidate is not None:
+                    toc_score = float(toc_candidate.score)
+                    match_kind = str(toc_candidate.metadata.get("toc_match_kind", "")).strip().lower()
+                    use_toc_route = toc_score >= 0.75
+                    if {"person", "date", "place"} & set(ctx.detected_intents):
+                        use_toc_route = match_kind == "chapter_number" or toc_score >= 0.92
+
+                if toc_candidate is not None and use_toc_route:
+                    route_meta = dict(toc_candidate.metadata)
+                    source_id = str(route_meta.get("source_id", "")).strip()
+                    span_start = self._coerce_positive_int(route_meta.get("start_page")) or self._coerce_positive_int(
+                        route_meta.get("page")
+                    )
+                    span_end = self._coerce_positive_int(route_meta.get("end_page")) or span_start
+                    filters = {"source_id": source_id} if source_id else None
+                    page_span = (span_start, span_end) if span_start and span_end else None
+
                     hits = self.retrieve_many(
                         queries,
                         filters=filters,
-                        page_span=None,
+                        page_span=page_span,
                     )
-                # Last resort: global retrieval.
-                if not hits:
-                    hits = self.retrieve_many(queries)
+                    if not hits and filters is not None:
+                        hits = self.retrieve_many(
+                            queries,
+                            filters=filters,
+                            page_span=None,
+                        )
+                    if not hits:
+                        hits = self.retrieve_many(queries)
+                else:
+                    hits = localization_decision_to_hits(decision)
             else:
-                hits = self.retrieve_many(queries)
-            if intent == RAGIntent.TOPIC_LOCATOR:
-                if not toc_short_circuit:
-                    if toc_hits:
-                        hits = merge_retrieval_hits(
-                            hit_groups=[toc_hits, hits],
-                            top_k=self.top_k,
-                            min_score=self.min_score,
-                        )
-                    chapter_hits = find_topic_locator_chapter_hits(
-                        question=question,
-                        vector_store=self.vector_store,
-                        top_k=self.top_k,
+                toc_hits: list[Hit] = []
+                toc_route: Hit | None = None
+                toc_short_circuit = False
+                if self.toc_index is not None:
+                    if intent == RAGIntent.TOPIC_LOCATOR:
+                        toc_hits = self.toc_index.search(question=question, top_k=self.top_k)
+                    elif intent in {RAGIntent.GROUNDED_TEXTBOOK, RAGIntent.PRACTICE_GENERATION}:
+                        # Always consult the TOC for grounded intents. Many lesson/topic titles only exist
+                        # in the manifest (not in window-text chunks), so TOC routing is a retrieval-quality win.
+                        toc_hits = self.toc_index.search(question=question, top_k=self.top_k)
+                    toc_route = self._select_unambiguous_toc_route(toc_hits)
+
+                if intent == RAGIntent.TOPIC_LOCATOR and toc_route is not None:
+                    toc_short_circuit = True
+                    hits = list(toc_hits)[: max(1, int(self.top_k))]
+                elif toc_route is not None and intent in {RAGIntent.GROUNDED_TEXTBOOK, RAGIntent.PRACTICE_GENERATION}:
+                    route_meta = toc_route.document.metadata
+                    source_id = str(route_meta.get("source_id", "")).strip()
+                    span_start = self._coerce_positive_int(route_meta.get("start_page")) or self._coerce_positive_int(
+                        route_meta.get("page")
                     )
-                    if chapter_hits:
-                        hits = merge_retrieval_hits(
-                            hit_groups=[hits, chapter_hits],
-                            top_k=self.top_k,
-                            min_score=self.min_score,
-                        )
-                    hits = filter_topic_locator_hits(
-                        hits=hits,
-                        question=question,
-                        top_k=self.top_k,
-                        front_matter_policy=self.topic_locator_front_matter_policy,
+                    span_end = self._coerce_positive_int(route_meta.get("end_page")) or span_start
+                    filters = {"source_id": source_id} if source_id else None
+                    page_span = (span_start, span_end) if span_start and span_end else None
+
+                    hits = self.retrieve_many(
+                        queries,
+                        filters=filters,
+                        page_span=page_span,
                     )
+                    # If the chapter span is mismatched or too narrow, fall back to the full book.
+                    if not hits and filters is not None:
+                        hits = self.retrieve_many(
+                            queries,
+                            filters=filters,
+                            page_span=None,
+                        )
+                    # Last resort: global retrieval.
+                    if not hits:
+                        hits = self.retrieve_many(queries)
+                else:
+                    hits = self.retrieve_many(queries)
+                if intent == RAGIntent.TOPIC_LOCATOR:
+                    if not toc_short_circuit:
+                        if toc_hits:
+                            hits = merge_retrieval_hits(
+                                hit_groups=[toc_hits, hits],
+                                top_k=self.top_k,
+                                min_score=self.min_score,
+                            )
+                        chapter_hits = find_topic_locator_chapter_hits(
+                            question=question,
+                            vector_store=self.vector_store,
+                            top_k=self.top_k,
+                        )
+                        if chapter_hits:
+                            hits = merge_retrieval_hits(
+                                hit_groups=[hits, chapter_hits],
+                                top_k=self.top_k,
+                                min_score=self.min_score,
+                            )
+                        hits = filter_topic_locator_hits(
+                            hits=hits,
+                            question=question,
+                            top_k=self.top_k,
+                            front_matter_policy=self.topic_locator_front_matter_policy,
+                        )
             if self._should_expand_neighbors(intent):
                 pre_expansion_top_score = self._resolve_top_score(hits)
                 pre_expansion_score_gap = self._resolve_score_gap(hits)

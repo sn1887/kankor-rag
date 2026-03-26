@@ -45,6 +45,14 @@ Then open `http://127.0.0.1:3000`.
 The API is exposed at `http://127.0.0.1:8000/v1`, and OpenWebUI uses the OpenAI-compatible endpoints automatically.
 The helper script sources the selected env file and runs Compose with `--force-recreate` so env-file values win over stale shell exports.
 
+## Production Deployment (Hetzner)
+
+Use the production runbook in `DEPLOY.md` for:
+
+- hardened Compose defaults (`restart`, `healthcheck`, log rotation),
+- localhost-only container port bindings with Nginx TLS termination,
+- index transfer, reboot validation, and monitoring checklist.
+
 ## Quick Demo (Local)
 
 Build a small demo index with hashing embeddings:
@@ -325,6 +333,8 @@ Key environment variables:
 
 - `RAG_INDEX_PATH` and `RAG_DOCSTORE_PATH`: FAISS and metadata paths
 - `RAG_TOC_MANIFEST_PATH`: optional TOC manifest used first for chapter/title topic-locator queries
+- `RAG_USE_V6_RETRIEVAL`: feature flag for the v6 retrieval pipeline (dense + lexical/TOC + RRF fusion + rerank + decision/abstain). Currently applied only to grounded/practice intents; set `false` to use the legacy retrieval path.
+- `RAG_V6_PAGE_LOCALIZATION_MIN_CONFIDENCE`: v6-only abstention threshold; if the v6 top candidate confidence is below this value, v6 asks for clarification instead of answering (calibrate to your retrieval score scale).
 - `RAG_VECTOR_STORE_BACKEND`: vector backend key (`faiss`) or `module.path:factory`
 - `RAG_LLM_BACKEND`: `transformers`, `openai`, `gemini`, `gemini_native`, `deepseek`, or `module.path:factory`
 - `RAG_EMBEDDING_BACKEND`: `hash`, `e5`, `openai`, `gemini`, `deepseek`, or `module.path:factory`
