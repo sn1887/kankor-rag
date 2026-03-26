@@ -32,6 +32,32 @@ def test_intent_router_classifies_topic_locator_with_decomposition() -> None:
     assert len(route.retrieval_queries) >= 2
 
 
+def test_intent_router_classifies_topic_locator_for_section_queries() -> None:
+    router = IntentRouter()
+    assert (
+        router.route(question="معادلات درجه دوم در کدام بخش کتاب ریاضی آمده است؟").intent
+        == RAGIntent.TOPIC_LOCATOR
+    )
+    assert (
+        router.route(question="گرامر زمان حال ساده در کتاب انگلیسی کجا آمده؟").intent
+        == RAGIntent.TOPIC_LOCATOR
+    )
+    assert (
+        router.route(question="در باره فصل اول کتاب دری صنف دهم معلومات بتی.").intent
+        == RAGIntent.TOPIC_LOCATOR
+    )
+
+
+def test_intent_router_does_not_misclassify_generic_where_questions_as_locator() -> None:
+    router = IntentRouter()
+    assert router.route(question="انسان از کجا آمده؟").intent == RAGIntent.GROUNDED_TEXTBOOK
+
+
+def test_intent_router_chapter_number_with_explain_intent_stays_grounded() -> None:
+    router = IntentRouter()
+    assert router.route(question="فصل اول کتاب فزیک را خلاصه و توضیح بده.").intent == RAGIntent.GROUNDED_TEXTBOOK
+
+
 def test_intent_router_defaults_to_grounded_textbook() -> None:
     router = IntentRouter()
     route = router.route(question="Explain kinetic energy with one simple example.")

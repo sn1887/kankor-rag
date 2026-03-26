@@ -6,10 +6,10 @@ from .routes.chat import router as chat_router
 from .routes.health import router as health_router
 from .routes.openai_compat import router as openai_compat_router
 from .routes.whatsapp import router as whatsapp_router
-from .settings import Settings
+from .settings import load_settings
 from .wiring import get_app_state
 
-settings = Settings()
+settings = load_settings()
 
 
 @asynccontextmanager

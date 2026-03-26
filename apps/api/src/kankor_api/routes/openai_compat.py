@@ -7,6 +7,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
+from rag_core.rag.citations import render_references_markdown_from_sources
 
 from ..chat_parsing import MessageCandidate, extract_question_and_history
 from ..auth import require_bearer_api_key
@@ -59,15 +60,24 @@ def _active_model_id() -> str:
     return get_app_state().settings.active_llm_model_id
 
 
+def _public_model_id() -> str:
+    settings = get_app_state().settings
+    alias = settings.resolved_openai_compat_model_alias
+    if alias:
+        return alias
+    return settings.active_llm_model_id
+
+
 def _resolve_response_model(requested_model: str | None) -> str:
     active_model = _active_model_id()
+    public_model = _public_model_id()
     candidate = (requested_model or '').strip()
-    if candidate and candidate != active_model:
+    if candidate and candidate not in {active_model, public_model}:
         raise HTTPException(
             status_code=400,
-            detail=f'model "{candidate}" is not available. Use "{active_model}".',
+            detail=f'model "{candidate}" is not available. Use "{public_model}".',
         )
-    return active_model
+    return public_model
 
 
 def _resolve_requested_max_tokens(request: ChatCompletionsRequest) -> int | None:
@@ -83,7 +93,7 @@ def _resolve_requested_max_tokens(request: ChatCompletionsRequest) -> int | None
 def list_models(authorization: str | None = Header(default=None, alias='Authorization')) -> dict:
     _check_openai_compat_key(authorization)
     created = int(time.time())
-    model_id = _active_model_id()
+    model_id = _public_model_id()
     return {
         'object': 'list',
         'data': [
@@ -161,10 +171,21 @@ def chat_completions(
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
                 ):
-                    if event['type'] != 'delta':
-                        continue
-                    delta_text = str(event['data'].get('text', ''))
-                    if not delta_text:
+                    if event["type"] == "references":
+                        data = dict(event.get("data") or {})
+                        if data.get("answer_has_references_heading"):
+                            continue
+                        sources = list(data.get("sources") or [])
+                        rendered = render_references_markdown_from_sources(sources=sources, heading="### منابع")
+                        if rendered.strip():
+                            delta_text = f"\n\n{rendered}"
+                        else:
+                            continue
+                    elif event["type"] == "delta":
+                        delta_text = str(event["data"].get("text", ""))
+                        if not delta_text:
+                            continue
+                    else:
                         continue
                     chunk = {
                         'id': completion_id,
@@ -196,15 +217,27 @@ def chat_completions(
         )
 
     chunks: list[str] = []
+    references_markdown = ""
     for event in pipeline.stream_answer(
         question=question,
         history=history,
         max_new_tokens=max_new_tokens,
         temperature=temperature,
     ):
-        if event['type'] == 'delta':
-            chunks.append(str(event['data'].get('text', '')))
-    answer = ''.join(chunks)
+        if event["type"] == "delta":
+            chunks.append(str(event["data"].get("text", "")))
+        elif event["type"] == "references":
+            data = dict(event.get("data") or {})
+            if data.get("answer_has_references_heading"):
+                continue
+            sources = list(data.get("sources") or [])
+            rendered = render_references_markdown_from_sources(sources=sources, heading="### منابع")
+            if rendered.strip():
+                references_markdown = rendered
+
+    answer = "".join(chunks).rstrip()
+    if references_markdown:
+        answer = f"{answer}\n\n{references_markdown}" if answer else references_markdown
     response = {
         'id': completion_id,
         'object': 'chat.completion',

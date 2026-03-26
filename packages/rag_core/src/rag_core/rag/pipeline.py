@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 import re
 
+import numpy as np
+
 from rag_core.contracts.embeddings import Embedder
 from rag_core.contracts.llm import LLMProvider
 from rag_core.contracts.vector_store import VectorStore
@@ -17,10 +19,14 @@ from rag_core.rag.adaptive_retrieval import (
 )
 from rag_core.rag.citations import (
     DEFAULT_SOURCE_PDF_URL_TEMPLATE,
-    build_references_suffix,
+    InlineCitationStripper,
+    answer_includes_references_heading,
     hits_to_source_payload,
+    select_reference_sources_for_answer,
+    strip_inline_citation_markers,
 )
 from rag_core.rag.context_plugins import (
+    AdaptiveAttachmentRetrievalSignals,
     GroundingContextPlugin,
     TextGroundingContextPlugin,
 )
@@ -30,6 +36,7 @@ from rag_core.rag.prompts import (
     build_task_directive,
 )
 from rag_core.rag.toc_locator import TOCIndex
+from rag_core.rag.topic_locator_response import render_topic_locator_answer
 from rag_core.types import ChatTurn, Hit
 
 
@@ -92,8 +99,11 @@ class RAGPipeline:
         local_expansion_neighbors: int = 1,
         retrieval_confidence_top_score: float = 0.27,
         retrieval_confidence_min_hits: int = 1,
+        retrieval_oos_top_score_threshold: float | None = None,
         toc_index: TOCIndex | None = None,
         topic_locator_front_matter_policy: TopicLocatorFrontMatterPolicy | None = None,
+        topic_locator_response_mode: str = "hybrid",
+        references_max_sources: int = 3,
     ) -> None:
         self.llm = llm
         self.embedder = embedder
@@ -116,8 +126,15 @@ class RAGPipeline:
         self.local_expansion_neighbors = max(0, int(local_expansion_neighbors))
         self.retrieval_confidence_top_score = float(retrieval_confidence_top_score)
         self.retrieval_confidence_min_hits = max(1, int(retrieval_confidence_min_hits))
+        self.retrieval_oos_top_score_threshold = (
+            float(retrieval_oos_top_score_threshold)
+            if retrieval_oos_top_score_threshold is not None
+            else None
+        )
         self.toc_index = toc_index
         self.topic_locator_front_matter_policy = topic_locator_front_matter_policy or TopicLocatorFrontMatterPolicy()
+        self.topic_locator_response_mode = (topic_locator_response_mode or "hybrid").strip().lower()
+        self.references_max_sources = max(1, int(references_max_sources))
 
     @staticmethod
     def _normalize_user_text(text: str) -> str:
@@ -196,16 +213,36 @@ class RAGPipeline:
         overfetch_multiplier: int = 8,
     ) -> list[Hit]:
         resolved_overfetch = max(1, int(overfetch_multiplier))
-        hit_groups: list[list[Hit]] = []
+
+        # Per-request dedupe to avoid repeated embedding calls for identical variants.
+        cleaned_questions: list[str] = []
+        seen_keys: set[str] = set()
         for question in questions:
-            cleaned = question.strip()
+            cleaned = str(question).strip()
             if not cleaned:
                 continue
-            candidates = self._search_query_with_options(
-                cleaned,
-                top_k=self.top_k * resolved_overfetch,
-                filters=filters,
+            normalized_key = re.sub(r"\s+", " ", cleaned, flags=re.UNICODE).casefold()
+            if normalized_key in seen_keys:
+                continue
+            seen_keys.add(normalized_key)
+            cleaned_questions.append(cleaned)
+
+        if not cleaned_questions:
+            return []
+
+        query_vectors = np.asarray(self.embedder.embed_queries(cleaned_questions), dtype=np.float32)
+        if query_vectors.ndim == 1:
+            query_vectors = query_vectors.reshape(1, -1)
+        if query_vectors.shape[0] != len(cleaned_questions):
+            raise ValueError(
+                "embed_queries() must return an array of shape (len(texts), embedding_dim). "
+                f"Got shape={getattr(query_vectors, 'shape', None)} for texts={len(cleaned_questions)}."
             )
+
+        requested_k = self.top_k * resolved_overfetch
+        hit_groups: list[list[Hit]] = []
+        for query_vector in query_vectors:
+            candidates = self.vector_store.search(query_vector, top_k=requested_k, filters=filters)
             if page_span is not None:
                 span_start, span_end = page_span
                 candidates = [
@@ -224,6 +261,25 @@ class RAGPipeline:
 
     def _confidence_fallback_response(self) -> str:
         return "I can give general guidance, but I could not verify this from the textbooks."
+
+    @staticmethod
+    def _resolve_top_score(hits: Sequence[Hit]) -> float | None:
+        if not hits:
+            return None
+        try:
+            return float(hits[0].score)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _resolve_score_gap(cls, hits: Sequence[Hit]) -> float | None:
+        if len(hits) < 2:
+            return None
+        top_score = cls._resolve_top_score(hits[:1])
+        second_score = cls._resolve_top_score(hits[1:2])
+        if top_score is None or second_score is None:
+            return None
+        return top_score - second_score
 
     @staticmethod
     def _should_retrieve(intent: RAGIntent) -> bool:
@@ -289,6 +345,7 @@ class RAGPipeline:
             return
 
         retrieval_assessment: RetrievalAssessment | None = None
+        adaptive_retrieval_signals: AdaptiveAttachmentRetrievalSignals | None = None
         hits: list[Hit] = []
         if self._should_retrieve(intent):
             queries = route.retrieval_queries or [question]
@@ -298,10 +355,10 @@ class RAGPipeline:
             if self.toc_index is not None:
                 if intent == RAGIntent.TOPIC_LOCATOR:
                     toc_hits = self.toc_index.search(question=question, top_k=self.top_k)
-                else:
-                    chapter_hint = IntentRouter._extract_chapter_number(question=question)
-                    if chapter_hint is not None:
-                        toc_hits = self.toc_index.search(question=question, top_k=self.top_k)
+                elif intent in {RAGIntent.GROUNDED_TEXTBOOK, RAGIntent.PRACTICE_GENERATION}:
+                    # Always consult the TOC for grounded intents. Many lesson/topic titles only exist
+                    # in the manifest (not in window-text chunks), so TOC routing is a retrieval-quality win.
+                    toc_hits = self.toc_index.search(question=question, top_k=self.top_k)
                 toc_route = self._select_unambiguous_toc_route(toc_hits)
 
             if intent == RAGIntent.TOPIC_LOCATOR and toc_route is not None:
@@ -360,17 +417,45 @@ class RAGPipeline:
                         front_matter_policy=self.topic_locator_front_matter_policy,
                     )
             if self._should_expand_neighbors(intent):
-                hits = expand_local_window_hits(
+                pre_expansion_top_score = self._resolve_top_score(hits)
+                pre_expansion_score_gap = self._resolve_score_gap(hits)
+                expanded_hits = expand_local_window_hits(
                     hits=hits,
                     vector_store=self.vector_store,
                     neighbors_per_side=self.local_expansion_neighbors,
                     max_hits=self.top_k + (self.local_expansion_neighbors * 2),
                 )
+                adaptive_retrieval_signals = AdaptiveAttachmentRetrievalSignals(
+                    top_score_pre_expansion=pre_expansion_top_score,
+                    score_gap_pre_expansion=pre_expansion_score_gap,
+                    top_score_post_expansion=self._resolve_top_score(expanded_hits),
+                    score_gap_post_expansion=self._resolve_score_gap(expanded_hits),
+                )
+                hits = expanded_hits
             retrieval_assessment = assess_retrieval_confidence(
                 hits=hits,
                 min_top_score=self.retrieval_confidence_top_score,
                 min_hits=self.retrieval_confidence_min_hits,
             )
+
+        if (
+            self._should_retrieve(intent)
+            and self.retrieval_oos_top_score_threshold is not None
+            and intent in {RAGIntent.GROUNDED_TEXTBOOK, RAGIntent.PRACTICE_GENERATION}
+        ):
+            top_score = float(hits[0].score) if hits else None
+            if top_score is None or top_score < self.retrieval_oos_top_score_threshold:
+                yield {'type': 'sources', 'data': []}
+                yield {
+                    'type': 'delta',
+                    'data': {
+                        'text': (
+                            "این سوال احتمالاً در محدودهٔ کتاب‌های درسی موجود در سیستم نیست. "
+                            "اگر سوال شما از کتاب‌های کانکور است، نام مضمون/صنف و چند کلیدواژهٔ دقیق‌تر را اضافه کنید."
+                        )
+                    },
+                }
+                return
 
         source_payload = (
             hits_to_source_payload(
@@ -383,9 +468,52 @@ class RAGPipeline:
         )
         yield {'type': 'sources', 'data': source_payload}
 
+        if (
+            intent == RAGIntent.TOPIC_LOCATOR
+            and self._should_retrieve(intent)
+            and self.topic_locator_response_mode != "llm"
+            and hits
+        ):
+            raw_answer = render_topic_locator_answer(hits=hits, max_candidates=min(3, self.top_k))
+            cleaned_answer = strip_inline_citation_markers(raw_answer)
+            if cleaned_answer:
+                yield {'type': 'delta', 'data': {'text': cleaned_answer}}
+            if source_payload:
+                selected_sources, strategy = select_reference_sources_for_answer(
+                    raw_answer=raw_answer,
+                    cleaned_answer=cleaned_answer,
+                    sources=source_payload,
+                    max_sources=self.references_max_sources,
+                )
+                yield {
+                    'type': 'references',
+                    'data': {
+                        'sources': selected_sources,
+                        'strategy': strategy,
+                        'answer_has_references_heading': answer_includes_references_heading(raw_answer),
+                    },
+                }
+            return
+
         if self._should_retrieve(intent) and retrieval_assessment is not None and retrieval_assessment.weak:
-            for token in self._confidence_fallback_response().split(' '):
+            raw_answer = self._confidence_fallback_response()
+            for token in raw_answer.split(' '):
                 yield {'type': 'delta', 'data': {'text': token + ' '}}
+            if source_payload:
+                selected_sources, strategy = select_reference_sources_for_answer(
+                    raw_answer=raw_answer,
+                    cleaned_answer=raw_answer,
+                    sources=source_payload,
+                    max_sources=self.references_max_sources,
+                )
+                yield {
+                    'type': 'references',
+                    'data': {
+                        'sources': selected_sources,
+                        'strategy': strategy,
+                        'answer_has_references_heading': answer_includes_references_heading(raw_answer),
+                    },
+                }
             return
 
         resolved_max_new_tokens, resolved_temperature = self.resolve_generation_params(
@@ -412,6 +540,7 @@ class RAGPipeline:
             intent=intent.value,
             task_directive=task_directive,
             corpus_version=self.corpus_version,
+            retrieval_signals=adaptive_retrieval_signals,
         )
         if request.attachments and not self.llm.supports_attachments:
             request = TextGroundingContextPlugin().build(
@@ -422,8 +551,11 @@ class RAGPipeline:
                 intent=intent.value,
                 task_directive=task_directive,
                 corpus_version=self.corpus_version,
+                retrieval_signals=adaptive_retrieval_signals,
             )
-        generated_chunks: list[str] = []
+        raw_chunks: list[str] = []
+        cleaned_chunks: list[str] = []
+        stripper = InlineCitationStripper()
         for token in self.llm.stream_chat(
             messages=request.messages,
             system_prompt=system_prompt,
@@ -431,12 +563,31 @@ class RAGPipeline:
             temperature=resolved_temperature,
             attachments=request.attachments,
         ):
-            generated_chunks.append(token)
-            yield {'type': 'delta', 'data': {'text': token}}
-        if self._should_retrieve(intent):
-            references_suffix = build_references_suffix(
-                answer_markdown=''.join(generated_chunks),
+            raw_chunks.append(token)
+            cleaned_piece = stripper.feed(token)
+            if cleaned_piece:
+                cleaned_chunks.append(cleaned_piece)
+                yield {'type': 'delta', 'data': {'text': cleaned_piece}}
+
+        tail = stripper.flush()
+        if tail:
+            cleaned_chunks.append(tail)
+            yield {'type': 'delta', 'data': {'text': tail}}
+
+        if self._should_retrieve(intent) and source_payload:
+            raw_answer = ''.join(raw_chunks)
+            cleaned_answer = ''.join(cleaned_chunks)
+            selected_sources, strategy = select_reference_sources_for_answer(
+                raw_answer=raw_answer,
+                cleaned_answer=cleaned_answer,
                 sources=source_payload,
+                max_sources=self.references_max_sources,
             )
-            if references_suffix:
-                yield {'type': 'delta', 'data': {'text': references_suffix}}
+            yield {
+                'type': 'references',
+                'data': {
+                    'sources': selected_sources,
+                    'strategy': strategy,
+                    'answer_has_references_heading': answer_includes_references_heading(raw_answer),
+                },
+            }

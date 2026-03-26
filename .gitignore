@@ -65,3 +65,8 @@ artifacts/
 data/*
 !data/sample_corpus/
 !data/sample_corpus/**
+!data/query_suites/
+!data/query_suites/**
+
+
+notes.md

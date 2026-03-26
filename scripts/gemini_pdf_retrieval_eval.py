@@ -180,7 +180,7 @@ DEFAULT_API_QUERIES: list[dict[str, Any]] = [
 
 
 NON_GROUNDED_INTENTS = {"smalltalk", "greeting", "study_coach", "direct_solver"}
-REFERENCE_HEADING_PATTERN = re.compile(r"(?im)^\s{0,3}#{1,6}\s*(references|sources)\b")
+REFERENCE_HEADING_PATTERN = re.compile(r"(?im)^\s{0,3}#{1,6}\s*(references|sources|منابع)\s*:?\s*$")
 CITATION_BADGE_PATTERN = re.compile(r"\[(S\d+)(?:[^\]]*)\]", re.IGNORECASE)
 
 
@@ -1034,23 +1034,24 @@ def _audit_citations(
     expected_subjects = _subject_expectation(query)
     expected_subject_match = _has_expected_subject(sources, expected_subjects)
     top_page = _coerce_positive_int(sources[0].get("page")) if sources else None
+    top_source_type = str(sources[0].get("sourceType", "")).strip().lower() if sources else ""
 
     issues: list[str] = []
     if api_error:
         issues.append("api_error")
     if citation_required and not sources:
         issues.append("no_sources_for_grounded_query")
-    if citation_required and sources and not inline_badges:
-        issues.append("missing_inline_citations")
+    if citation_required and inline_badges:
+        issues.append("unexpected_inline_citations")
     if citation_required and not references:
         issues.append("missing_references_section")
     if unknown_badges:
         issues.append("unknown_citation_badges")
     if not citation_required and inline_badges:
         issues.append("unexpected_inline_citations_for_nongrounded_query")
-    if expected_subject_match is False:
+    if citation_required and expected_subject_match is False:
         issues.append("expected_subject_not_found_in_sources")
-    if citation_required and top_page is not None and top_page <= 3:
+    if citation_required and top_page is not None and top_page <= 3 and top_source_type != "toc_manifest":
         issues.append("top_source_front_matter")
 
     return {
@@ -1346,6 +1347,26 @@ def _run_api_mode(args: argparse.Namespace, output_dir: Path) -> None:
     missing_inline_count = sum(1 for row in audit_rows if "missing_inline_citations" in row.get("issues", []))
     unknown_badges_count = sum(1 for row in audit_rows if "unknown_citation_badges" in row.get("issues", []))
 
+    def _latency_stats(values: list[int]) -> dict[str, Any]:
+        if not values:
+            return {"count": 0, "p50": None, "p90": None}
+        arr = np.asarray(values, dtype=np.float32)
+        return {
+            "count": len(values),
+            "p50": int(np.percentile(arr, 50)),
+            "p90": int(np.percentile(arr, 90)),
+        }
+
+    latencies_overall: list[int] = []
+    latencies_by_intent: dict[str, list[int]] = {}
+    for row in generation_rows:
+        latency_ms = int(row.get("latency_ms", 0))
+        if latency_ms <= 0:
+            continue
+        latencies_overall.append(latency_ms)
+        intent = str(row.get("intent", "unknown")).strip().lower() or "unknown"
+        latencies_by_intent.setdefault(intent, []).append(latency_ms)
+
     summary = {
         "mode": "api",
         "api_base_url": args.api_base_url,
@@ -1362,6 +1383,10 @@ def _run_api_mode(args: argparse.Namespace, output_dir: Path) -> None:
         ),
         "unknown_badges_count": unknown_badges_count,
         "issue_counts": dict(issue_counter),
+        "latency_ms": {
+            "overall": _latency_stats(latencies_overall),
+            "by_intent": {intent: _latency_stats(values) for intent, values in sorted(latencies_by_intent.items())},
+        },
         "output_dir": str(output_dir),
         "qrels_file": args.qrels_file,
         "metrics_k": max(1, int(args.metrics_k)),

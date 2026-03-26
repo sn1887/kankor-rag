@@ -17,6 +17,20 @@ class _FakePipeline:
     def stream_answer(self, *, question: str, history):
         yield {"type": "sources", "data": [{"badge": "S1"}]}
         yield {"type": "delta", "data": {"text": f"answer:{question}"}}
+        yield {
+            "type": "references",
+            "data": {
+                "sources": [
+                    {
+                        "badge": "S1",
+                        "title": "G10-Dr-Biology",
+                        "sourceId": "G10-Dr-Biology",
+                        "page": 7,
+                        "pdfUrl": "https://example.com/g10-bio.pdf#page=7",
+                    }
+                ]
+            },
+        }
 
 
 class _FakeMediaProvider:
@@ -54,12 +68,16 @@ def test_whatsapp_processor_handles_text_message() -> None:
 
     asyncio.run(processor.process(job))
 
-    assert len(messenger.sent_messages) == 1
+    assert len(messenger.sent_messages) == 2
     assert messenger.sent_messages[0].text == "answer:Define photosynthesis"
+    assert messenger.sent_messages[1].text.startswith("منابع:")
+    assert "https://example.com/g10-bio.pdf#page=7" in messenger.sent_messages[1].text
     history = store.get_history("93700111222")
     assert len(history) == 2
     assert history[0].role == "user"
     assert history[0].content == "Define photosynthesis"
+    assert "منابع:" not in history[1].content
+    assert "example.com" not in history[1].content
 
 
 def test_whatsapp_processor_handles_image_ocr_path() -> None:
@@ -85,8 +103,10 @@ def test_whatsapp_processor_handles_image_ocr_path() -> None:
 
     asyncio.run(processor.process(job))
 
-    assert len(messenger.sent_messages) == 1
+    assert len(messenger.sent_messages) == 2
     assert "derivative" in messenger.sent_messages[0].text
+    assert messenger.sent_messages[1].text.startswith("منابع:")
     history = store.get_history("93700888999")
     assert len(history) == 2
     assert "derivative" in history[0].content
+    assert "منابع:" not in history[1].content

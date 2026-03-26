@@ -80,3 +80,7 @@ class OpenAIEmbedder(Embedder):
     def embed_query(self, text: str) -> np.ndarray:
         vectors = self.embed_documents([text])
         return vectors[0]
+
+    def embed_queries(self, texts: Sequence[str]) -> np.ndarray:
+        # OpenAI embedding endpoints are symmetric (no query/document distinction).
+        return self.embed_documents(texts)

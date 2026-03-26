@@ -80,6 +80,7 @@ def hits_to_source_payload(
                 'language': str(meta.get('language', 'unknown')),
                 'gradeBand': str(meta.get('grade_band', 'mixed')),
                 'sourceId': str(meta.get('source_id', '')),
+                'sourceType': str(meta.get('source_type', 'unknown')),
                 'page': page,
                 'pdfUrl': build_source_pdf_url(meta, url_template=template),
                 'corpusVersion': corpus_version,
@@ -89,7 +90,201 @@ def hits_to_source_payload(
 
 
 _CITATION_BADGE_PATTERN = re.compile(r"\[(S\d+)(?:[^\]]*)\]", re.IGNORECASE)
-_REFERENCE_HEADING_PATTERN = re.compile(r"(?im)^\s{0,3}#{1,6}\s*(references|sources)\b")
+_REFERENCE_HEADING_PATTERN = re.compile(
+    r"(?im)^\s{0,3}#{1,6}\s*(references|sources|منابع)\s*:?\s*$"
+)
+_REFERENCE_HEADING_PATTERN_PLAIN = re.compile(r"(?im)^\s*(references|sources|منابع)\s*:?\s*$")
+
+_OVERLAP_TOKEN_PATTERN = re.compile(r"[\w\u0600-\u06FF]+", flags=re.UNICODE)
+_PERSIAN_DIGIT_TRANSLATION = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+_ARABIC_SCRIPT_PATTERN = re.compile(r"[\u0600-\u06FF]")
+_SOURCE_ID_TITLE_PATTERN = re.compile(r"^G(?P<grade>\d+)-(?P<lang>[A-Za-z]{2})-(?P<subject>.+)$")
+
+_SOURCE_SUBJECT_DARI_MAP = {
+    "biology": "بیولوژی",
+    "chemistry": "کیمیا",
+    "physics": "فزیک",
+    "physic": "فزیک",
+    "math": "ریاضی",
+    "history": "تاریخ",
+    "geography": "جغرافیه",
+    "dari": "دری",
+    "pashto": "پشتو",
+    "english": "انگلیسی",
+    "arabic": "عربی",
+    "computer": "کمپیوتر",
+    "civic": "تعلیمات مدنی",
+    "islamic study": "تعلیمات اسلامی",
+    "islamic study jafari": "تعلیمات اسلامی جعفری",
+    "islamic study hanafi": "تعلیمات اسلامی حنفی",
+    "islamic study tafseer": "تفسیر",
+    "islamic study tafsir": "تفسیر",
+    "islam": "تعلیمات اسلامی",
+    "tafseer": "تفسیر",
+    "tafsir": "تفسیر",
+}
+
+
+def to_persian_digits(value: int | str) -> str:
+    return str(value).translate(_PERSIAN_DIGIT_TRANSLATION)
+
+
+def _normalize_subject_key(value: str) -> str:
+    normalized = value.strip().casefold().replace("_", " ").replace("-", " ")
+    return " ".join(normalized.split())
+
+
+def _localize_book_title_dari(*, title: str, source_id: str) -> str | None:
+    # Keep already localized titles unchanged.
+    if _ARABIC_SCRIPT_PATTERN.search(title):
+        return title.strip()
+
+    candidate = source_id.strip() or title.strip()
+    match = _SOURCE_ID_TITLE_PATTERN.match(candidate)
+    if not match:
+        return None
+
+    subject_key = _normalize_subject_key(str(match.group("subject")))
+    subject_dari = _SOURCE_SUBJECT_DARI_MAP.get(subject_key)
+    if not subject_dari:
+        return None
+
+    grade = to_persian_digits(match.group("grade"))
+    return f"{subject_dari} صنف {grade}"
+
+
+class InlineCitationStripper:
+    """Streaming-safe remover for inline citation markers like `[S1]` / `[S1 p.42]`.
+
+    Goal: remove bracketed citation markers from the *answer body* while the model is streaming.
+
+    State machine:
+    - NORMAL: emit text, but buffer spaces/tabs in case a citation follows.
+    - SAW_LBRACKET: saw `[`; buffer it until we can confirm it's a citation.
+    - SAW_S: saw `[S` / `[s`; buffer until we see a digit.
+    - IN_BADGE: saw `[S` + digit; buffer until `]` then drop the whole buffer.
+
+    On invalid sequences (e.g. `[X`), abort and flush buffered text literally.
+    """
+
+    __slots__ = ("_state", "_pending_ws", "_buffer", "_max_buffer")
+
+    NORMAL = 0
+    SAW_LBRACKET = 1
+    SAW_S = 2
+    IN_BADGE = 3
+
+    def __init__(self, *, max_buffer: int = 128) -> None:
+        self._state = self.NORMAL
+        self._pending_ws = ""
+        self._buffer = ""
+        self._max_buffer = max(16, int(max_buffer))
+
+    def feed(self, text: str) -> str:
+        if not text:
+            return ""
+
+        out: list[str] = []
+        for ch in text:
+            if self._state == self.NORMAL:
+                if ch in (" ", "\t"):
+                    self._pending_ws += ch
+                    continue
+                if ch == "[":
+                    # Don't emit pending spaces yet; if this is a citation we drop them too.
+                    self._state = self.SAW_LBRACKET
+                    self._buffer = "["
+                    continue
+
+                if self._pending_ws:
+                    out.append(self._pending_ws)
+                    self._pending_ws = ""
+                out.append(ch)
+                continue
+
+            if self._state == self.SAW_LBRACKET:
+                if ch in (" ", "\t"):
+                    # Not a citation; flush buffer as literal.
+                    if self._pending_ws:
+                        out.append(self._pending_ws)
+                        self._pending_ws = ""
+                    out.append(self._buffer)
+                    self._buffer = ""
+                    out.append(ch)
+                    self._state = self.NORMAL
+                    continue
+                if ch in ("S", "s"):
+                    self._buffer += ch
+                    self._state = self.SAW_S
+                    continue
+
+                # Not a citation.
+                if self._pending_ws:
+                    out.append(self._pending_ws)
+                    self._pending_ws = ""
+                out.append(self._buffer)
+                self._buffer = ""
+                out.append(ch)
+                self._state = self.NORMAL
+                continue
+
+            if self._state == self.SAW_S:
+                if ch.isdigit():
+                    self._buffer += ch
+                    self._state = self.IN_BADGE
+                    continue
+
+                # Not a citation.
+                if self._pending_ws:
+                    out.append(self._pending_ws)
+                    self._pending_ws = ""
+                out.append(self._buffer)
+                self._buffer = ""
+                out.append(ch)
+                self._state = self.NORMAL
+                continue
+
+            # IN_BADGE
+            self._buffer += ch
+            if ch == "]":
+                # Drop citation + leading pending whitespace.
+                self._pending_ws = ""
+                self._buffer = ""
+                self._state = self.NORMAL
+                continue
+            if len(self._buffer) > self._max_buffer:
+                # Abort: treat buffered text as literal.
+                if self._pending_ws:
+                    out.append(self._pending_ws)
+                    self._pending_ws = ""
+                out.append(self._buffer)
+                self._buffer = ""
+                self._state = self.NORMAL
+
+        return "".join(out)
+
+    def flush(self) -> str:
+        """Flush any buffered literal text at end-of-stream."""
+        out: list[str] = []
+        if self._state != self.NORMAL and self._buffer:
+            if self._pending_ws:
+                out.append(self._pending_ws)
+                self._pending_ws = ""
+            out.append(self._buffer)
+            self._buffer = ""
+        elif self._pending_ws:
+            out.append(self._pending_ws)
+            self._pending_ws = ""
+        self._state = self.NORMAL
+        return "".join(out)
+
+
+def strip_inline_citation_markers(text: str) -> str:
+    """Best-effort inline citation stripping for already-buffered strings."""
+    stripper = InlineCitationStripper()
+    cleaned = stripper.feed(text)
+    cleaned += stripper.flush()
+    return cleaned
 
 
 def _escape_markdown_text(value: str) -> str:
@@ -121,67 +316,161 @@ def extract_cited_badges(answer_markdown: str) -> list[str]:
     return ordered
 
 
+def dedupe_sources_by_sourceid_page(sources: Sequence[dict]) -> list[dict]:
+    seen: set[tuple[str, int | None]] = set()
+    deduped: list[dict] = []
+    for source in sources:
+        source_id = str(source.get("sourceId") or source.get("id") or source.get("title") or "").strip()
+        page = _coerce_positive_int(source.get("page"))
+        key = (source_id, page)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(source)
+    return deduped
+
+
+def _tokenize_for_overlap(text: str) -> set[str]:
+    return {
+        token.casefold()
+        for token in _OVERLAP_TOKEN_PATTERN.findall(text or "")
+        if len(token) >= 2
+    }
+
+
+def select_reference_sources_for_answer(
+    *,
+    raw_answer: str,
+    cleaned_answer: str,
+    sources: Sequence[dict],
+    max_sources: int = 3,
+) -> tuple[list[dict], str]:
+    """Select best-effort reference sources for an answer without inline markers.
+
+    Strategy:
+    1) If the raw model answer contains `[S#]` badges, select those sources in order.
+    2) Otherwise, rank by lexical overlap between the cleaned answer and (title + snippet) of each source.
+       Ties are broken by retrieval score.
+    3) Final fallback: top retrieved sources (original order).
+
+    Tradeoff: without explicit badge signals, references reflect "most relevant retrieved sources"
+    rather than claim-by-claim attribution.
+    """
+    limit = max(1, int(max_sources))
+    source_list = list(sources)
+    if not source_list:
+        return [], "none"
+
+    badge_to_source: dict[str, dict] = {}
+    for source in source_list:
+        badge = str(source.get("badge", "")).strip().upper()
+        if badge:
+            badge_to_source[badge] = source
+
+    cited_badges = extract_cited_badges(raw_answer)
+    if cited_badges:
+        selected = [badge_to_source[badge] for badge in cited_badges if badge in badge_to_source]
+        selected = dedupe_sources_by_sourceid_page(selected)
+        if selected:
+            return selected[:limit], "cited_badges"
+
+    answer_tokens = _tokenize_for_overlap(cleaned_answer)
+    if answer_tokens:
+        scored: list[tuple[int, float, int, dict]] = []
+        for idx, source in enumerate(source_list):
+            title = str(source.get("title") or "")
+            snippet = str(source.get("snippet") or "")
+            source_tokens = _tokenize_for_overlap(f"{title} {snippet}")
+            overlap = len(answer_tokens & source_tokens)
+            score = float(source.get("score") or 0.0)
+            scored.append((overlap, score, idx, source))
+        max_overlap = max((item[0] for item in scored), default=0)
+        if max_overlap > 0:
+            scored.sort(key=lambda item: (-item[0], -item[1], item[2]))
+            ranked_sources = [item[3] for item in scored]
+            ranked_sources = dedupe_sources_by_sourceid_page(ranked_sources)
+            return ranked_sources[:limit], "lexical_overlap"
+
+    ranked_sources = dedupe_sources_by_sourceid_page(source_list)
+    return ranked_sources[:limit], "retrieval_topk"
+
+
+def answer_includes_references_heading(text: str) -> bool:
+    if not text:
+        return False
+    return bool(_REFERENCE_HEADING_PATTERN.search(text) or _REFERENCE_HEADING_PATTERN_PLAIN.search(text))
+
+
 def select_reference_sources(
     *,
     answer_markdown: str,
     sources: Sequence[dict],
     fallback_limit: int = 3,
 ) -> list[dict]:
-    fallback_size = max(1, int(fallback_limit))
-    badge_to_source: dict[str, dict] = {}
-    for source in sources:
-        badge = str(source.get("badge", "")).strip().upper()
-        if badge:
-            badge_to_source[badge] = source
-    selected = [badge_to_source[badge] for badge in extract_cited_badges(answer_markdown) if badge in badge_to_source]
-    if selected:
-        return selected
-    return list(sources[:fallback_size])
+    selected, _ = select_reference_sources_for_answer(
+        raw_answer=answer_markdown,
+        cleaned_answer=strip_inline_citation_markers(answer_markdown),
+        sources=sources,
+        max_sources=fallback_limit,
+    )
+    return selected
 
 
 def render_references_markdown(
     *,
     answer_markdown: str,
     sources: Sequence[dict],
-    heading: str = "### References",
+    heading: str = "### منابع",
     fallback_limit: int = 3,
 ) -> str:
-    cited_badges = extract_cited_badges(answer_markdown)
-    selected_sources = select_reference_sources(
-        answer_markdown=answer_markdown,
+    selected_sources, _ = select_reference_sources_for_answer(
+        raw_answer=answer_markdown,
+        cleaned_answer=strip_inline_citation_markers(answer_markdown),
         sources=sources,
-        fallback_limit=fallback_limit,
+        max_sources=fallback_limit,
     )
     if not selected_sources:
         return ""
 
     lines = [heading]
-    if not cited_badges:
-        lines.append("_No inline [S#] citations were detected in the model answer; showing top retrieved sources._")
-    for source in selected_sources:
-        badge = str(source.get("badge", "S?")).strip() or "S?"
-        title = _escape_markdown_text(str(source.get("title") or "Unknown source").strip())
-        source_id = _escape_markdown_text(str(source.get("sourceId") or "").strip())
+    for idx, source in enumerate(selected_sources, start=1):
+        raw_title = str(source.get("title") or "Unknown source").strip()
+        raw_source_id = str(source.get("sourceId") or "").strip()
+        localized_title = _localize_book_title_dari(title=raw_title, source_id=raw_source_id)
+        title = _escape_markdown_text(localized_title or raw_title)
+        source_id = _escape_markdown_text(raw_source_id)
         page = _coerce_positive_int(source.get("page"))
-        corpus_version = str(source.get("corpusVersion") or "").strip()
         pdf_url = _safe_http_url(str(source.get("pdfUrl") or ""))
 
         descriptor = title
-        if source_id and source_id != title:
+        if not localized_title and raw_source_id and raw_source_id != raw_title:
             descriptor = f"{title} ({source_id})"
 
-        detail_parts: list[str] = []
+        line = f"- **{to_persian_digits(idx)}.** {descriptor}"
         if page is not None:
-            detail_parts.append(f"p. {page}")
-        if corpus_version:
-            detail_parts.append(corpus_version)
-        details = f" ({', '.join(detail_parts)})" if detail_parts else ""
+            line = f"{line}، صفحه {to_persian_digits(page)}"
 
         if pdf_url:
-            lines.append(f"- [{badge}] **{descriptor}**{details}. [Open page]({pdf_url})")
-        else:
-            lines.append(f"- [{badge}] **{descriptor}**{details}.")
+            line = f"{line} — [باز کردن صفحه]({pdf_url})"
+
+        lines.append(line)
     return "\n".join(lines)
+
+
+def render_references_markdown_from_sources(
+    *,
+    sources: Sequence[dict],
+    heading: str = "### منابع",
+) -> str:
+    if not sources:
+        return ""
+    # The renderer is intentionally dumb: selection happens upstream.
+    return render_references_markdown(
+        answer_markdown="",
+        sources=sources,
+        heading=heading,
+        fallback_limit=len(sources),
+    )
 
 
 def append_references_markdown(

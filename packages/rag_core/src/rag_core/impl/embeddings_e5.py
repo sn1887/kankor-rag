@@ -36,6 +36,9 @@ class HashingEmbedder(Embedder):
     def embed_query(self, text: str) -> np.ndarray:
         return self._embed(text)
 
+    def embed_queries(self, texts: Sequence[str]) -> np.ndarray:
+        return self.embed_documents(texts)
+
 
 class MultilingualE5Embedder(Embedder):
     def __init__(
@@ -139,3 +142,17 @@ class MultilingualE5Embedder(Embedder):
             show_progress_bar=False,
         )[0]
         return np.asarray(embedding, dtype=np.float32)
+
+    def embed_queries(self, texts: Sequence[str]) -> np.ndarray:
+        if not texts:
+            return np.empty((0, self._fallback.dimensions), dtype=np.float32)
+        model = self._load_model()
+        if model is None:
+            return self._fallback.embed_documents(texts)
+        embeddings = model.encode(
+            [self._prefix_query(text) for text in texts],
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )
+        return np.asarray(embeddings, dtype=np.float32)

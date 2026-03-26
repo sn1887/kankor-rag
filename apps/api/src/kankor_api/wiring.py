@@ -34,7 +34,7 @@ from .compatibility import (
     resolve_expected_embedding_dimension,
     validate_index_runtime_compatibility,
 )
-from .settings import Settings
+from .settings import Settings, load_settings
 from .whatsapp.contracts import (
     ConversationStore,
     JobQueue,
@@ -408,6 +408,12 @@ def _build_grounding_context_plugin(settings: Settings) -> GroundingContextPlugi
         return PdfWindowGroundingContextPlugin(
             max_attachments=settings.rag_pdf_window_max_attachments,
             max_pages_per_attachment=settings.rag_pdf_window_max_pages_per_attachment,
+            adaptive_enabled=settings.rag_pdf_window_adaptive_enabled,
+            adaptive_min_attachments=settings.rag_pdf_window_adaptive_min_attachments,
+            adaptive_top_score_low=settings.rag_pdf_window_adaptive_top_score_low,
+            adaptive_top_score_very_low=settings.rag_pdf_window_adaptive_top_score_very_low,
+            adaptive_score_gap_low=settings.rag_pdf_window_adaptive_score_gap_low,
+            adaptive_complexity_length_tokens=settings.rag_pdf_window_adaptive_complexity_length_tokens,
         )
     raise ValueError('Unsupported RAG context mode. Use "text" or "pdf_windows".')
 
@@ -513,7 +519,7 @@ def _build_whatsapp_runtime(settings: Settings, *, pipeline: RAGPipeline) -> Wha
 
 @lru_cache(maxsize=1)
 def get_app_state() -> AppState:
-    settings = Settings()
+    settings = load_settings()
     vector_store = _build_vector_store(settings)
     manifest = load_index_manifest(settings.rag_index_path)
     expected_embedding_dimension = resolve_expected_embedding_dimension(
@@ -549,6 +555,7 @@ def get_app_state() -> AppState:
         local_expansion_neighbors=settings.rag_local_expansion_neighbors,
         retrieval_confidence_top_score=settings.rag_retrieval_confidence_top_score,
         retrieval_confidence_min_hits=settings.rag_retrieval_confidence_min_hits,
+        retrieval_oos_top_score_threshold=settings.rag_retrieval_oos_top_score_threshold,
         toc_index=toc_index,
         topic_locator_front_matter_policy=TopicLocatorFrontMatterPolicy(
             enabled=settings.rag_topic_locator_front_matter_suppression_enabled,
@@ -556,6 +563,7 @@ def get_app_state() -> AppState:
             allow_front_matter_when_empty=settings.rag_topic_locator_front_matter_allow_when_empty,
             suppress_when_page_unknown=settings.rag_topic_locator_front_matter_suppress_page_unknown,
         ),
+        topic_locator_response_mode=settings.rag_topic_locator_response_mode,
         max_new_tokens=settings.rag_max_new_tokens,
         max_new_tokens_limit=settings.rag_max_new_tokens_hard_limit,
         temperature=settings.rag_temperature,
@@ -563,6 +571,7 @@ def get_app_state() -> AppState:
         temperature_max=settings.rag_temperature_max,
         default_language=settings.rag_default_language,
         source_pdf_url_template=settings.rag_source_pdf_url_template,
+        references_max_sources=settings.rag_references_max_sources,
         grounding_context_plugin=_build_grounding_context_plugin(settings),
     )
     whatsapp_runtime = _build_whatsapp_runtime(settings, pipeline=pipeline)

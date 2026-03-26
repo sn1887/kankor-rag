@@ -17,6 +17,12 @@ def test_resolved_chat_api_key_falls_back_to_compat_key(monkeypatch) -> None:
     assert settings.resolved_chat_api_key == "compat-key"
 
 
+def test_resolved_openai_compat_model_alias_strips_whitespace(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_OPENAI_COMPAT_MODEL_ALIAS", "  KARDAN GPT  ")
+    settings = Settings()
+    assert settings.resolved_openai_compat_model_alias == "KARDAN GPT"
+
+
 def test_resolved_gemini_api_key_prefers_rag_key(monkeypatch) -> None:
     monkeypatch.setenv("RAG_GEMINI_API_KEY", "gemini-rag")
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-env")
@@ -97,3 +103,19 @@ def test_adaptive_rag_policy_settings_are_loaded(monkeypatch) -> None:
     assert settings.rag_direct_solver_enabled is True
     assert settings.rag_direct_solver_min_signal_score == 4
     assert settings.rag_topic_locator_front_matter_max_page == 7
+
+
+def test_pdf_window_adaptive_settings_are_loaded(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_PDF_WINDOW_ADAPTIVE_ENABLED", "true")
+    monkeypatch.setenv("RAG_PDF_WINDOW_ADAPTIVE_MIN_ATTACHMENTS", "2")
+    monkeypatch.setenv("RAG_PDF_WINDOW_ADAPTIVE_TOP_SCORE_LOW", "0.5")
+    monkeypatch.setenv("RAG_PDF_WINDOW_ADAPTIVE_TOP_SCORE_VERY_LOW", "0.25")
+    monkeypatch.setenv("RAG_PDF_WINDOW_ADAPTIVE_SCORE_GAP_LOW", "0.04")
+    monkeypatch.setenv("RAG_PDF_WINDOW_ADAPTIVE_COMPLEXITY_LENGTH_TOKENS", "30")
+    settings = Settings()
+    assert settings.rag_pdf_window_adaptive_enabled is True
+    assert settings.rag_pdf_window_adaptive_min_attachments == 2
+    assert settings.rag_pdf_window_adaptive_top_score_low == 0.5
+    assert settings.rag_pdf_window_adaptive_top_score_very_low == 0.25
+    assert settings.rag_pdf_window_adaptive_score_gap_low == 0.04
+    assert settings.rag_pdf_window_adaptive_complexity_length_tokens == 30

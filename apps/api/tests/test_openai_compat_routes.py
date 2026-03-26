@@ -34,9 +34,30 @@ class _FakePipeline:
         yield {"type": "delta", "data": {"text": f"echo: {question}"}}
 
 
+class _FakePipelineWithRefs(_FakePipeline):
+    def stream_answer(self, *, question: str, history, max_new_tokens=None, temperature=None):
+        yield {"type": "sources", "data": [{"badge": "S1"}]}
+        yield {"type": "delta", "data": {"text": f"echo: {question}"}}
+        yield {
+            "type": "references",
+            "data": {
+                "sources": [
+                    {
+                        "badge": "S1",
+                        "title": "Book",
+                        "sourceId": "Book",
+                        "page": 7,
+                        "pdfUrl": "https://example.com/book.pdf#page=7",
+                    }
+                ]
+            },
+        }
+
+
 class _FakeSettings:
     rag_openai_compat_api_key = None
     active_llm_model_id = "gpt-4o-mini"
+    resolved_openai_compat_model_alias = None
 
 
 def _patch_state(monkeypatch) -> None:
@@ -60,6 +81,26 @@ def test_chat_completions_non_stream_uses_openai_shape(monkeypatch) -> None:
     assert payload["model"] == "gpt-4o-mini"
     assert "sources" not in payload
     assert payload["choices"][0]["message"]["content"] == "echo: hello"
+
+
+def test_chat_completions_non_stream_appends_references(monkeypatch) -> None:
+    state = SimpleNamespace(settings=_FakeSettings(), pipeline=_FakePipelineWithRefs())
+    monkeypatch.setattr(openai_compat, "get_app_state", lambda: state)
+    response = openai_compat.chat_completions(
+        openai_compat.ChatCompletionsRequest(
+            model="gpt-4o-mini",
+            messages=[openai_compat.OpenAIMessageIn(role="user", content="hello")],
+            stream=False,
+        ),
+        authorization=None,
+    )
+    payload = json.loads(response.body.decode("utf-8"))
+    content = payload["choices"][0]["message"]["content"]
+    assert content.startswith("echo: hello")
+    assert "### منابع" in content
+    assert "- **۱.** Book، صفحه ۷" in content
+    assert "[باز کردن صفحه](https://example.com/book.pdf#page=7)" in content
+    assert "[S" not in content
 
 
 def test_chat_completions_stream_omits_custom_sources_field(monkeypatch) -> None:
@@ -101,3 +142,30 @@ def test_chat_completions_rejects_conflicting_token_fields(monkeypatch) -> None:
             ),
             authorization=None,
         )
+
+
+def test_list_models_prefers_alias_when_configured(monkeypatch) -> None:
+    settings = _FakeSettings()
+    settings.resolved_openai_compat_model_alias = "KARDAN GPT Flash"
+    state = SimpleNamespace(settings=settings, pipeline=_FakePipeline())
+    monkeypatch.setattr(openai_compat, "get_app_state", lambda: state)
+
+    payload = openai_compat.list_models(authorization=None)
+    assert payload["data"][0]["id"] == "KARDAN GPT Flash"
+
+
+def test_chat_completions_accepts_active_model_when_alias_is_set(monkeypatch) -> None:
+    settings = _FakeSettings()
+    settings.resolved_openai_compat_model_alias = "KARDAN GPT Flash"
+    state = SimpleNamespace(settings=settings, pipeline=_FakePipeline())
+    monkeypatch.setattr(openai_compat, "get_app_state", lambda: state)
+    response = openai_compat.chat_completions(
+        openai_compat.ChatCompletionsRequest(
+            model="gpt-4o-mini",
+            messages=[openai_compat.OpenAIMessageIn(role="user", content="hello")],
+            stream=False,
+        ),
+        authorization=None,
+    )
+    payload = json.loads(response.body.decode("utf-8"))
+    assert payload["model"] == "KARDAN GPT Flash"

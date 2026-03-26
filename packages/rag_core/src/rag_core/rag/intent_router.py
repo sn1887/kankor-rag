@@ -208,6 +208,9 @@ _TOPIC_LOCATOR_KEYWORDS = {
     "which chapter",
     "which lesson",
     "which page",
+    "which section",
+    "which part",
+    "which unit",
     "where taught",
     "where covered",
     "in which chapter",
@@ -216,6 +219,14 @@ _TOPIC_LOCATOR_KEYWORDS = {
     "در کدام فصل",
     "کدام صفحه",
     "در کدام صفحه",
+    "کدام بخش",
+    "در کدام بخش",
+    "کدام قسمت",
+    "در کدام قسمت",
+    "کدام مبحث",
+    "در کدام مبحث",
+    "کدام درس",
+    "در کدام درس",
     "در کجا",
     "په کوم فصل",
     "په کومه صفحه",
@@ -231,6 +242,23 @@ _CHAPTER_TITLE_QUERY_HINTS = {
     "چه است",
     "عنوان",
     "نام",
+}
+
+_CHAPTER_EXPLAIN_KEYWORDS = {
+    "explain",
+    "describe",
+    "overview",
+    "summary",
+    "summarize",
+    "step by step",
+    "توضیح",
+    "تشریح",
+    "شرح",
+    "خلاصه",
+    "مرحله ای",
+    "مرحله‌ای",
+    "گام به گام",
+    "آموزشی",
 }
 
 _BROAD_SCOPE_KEYWORDS = {
@@ -494,12 +522,41 @@ class IntentRouter:
             return False
         return cls._contains_any(normalized, _CHAPTER_TITLE_QUERY_HINTS)
 
+    @classmethod
+    def _looks_like_topic_locator(cls, question: str) -> bool:
+        normalized = cls._normalize(question)
+        if not normalized:
+            return False
+
+        # Common pattern: "در کتاب X ... کجا آمده؟"
+        if "در کتاب" in normalized and "کجا" in normalized:
+            return True
+
+        chapter_number = cls._extract_chapter_number(question=question)
+        if not chapter_number:
+            return False
+
+        # If the user references a specific chapter number *in a textbook*, treat this as a locator
+        # unless they explicitly request an explanation/summary.
+        has_book_hint = any(token in normalized for token in ("کتاب", "book", "textbook"))
+        if not has_book_hint:
+            return False
+        if cls._contains_any(normalized, _CHAPTER_EXPLAIN_KEYWORDS):
+            return False
+        if cls._contains_any(normalized, _PRACTICE_KEYWORDS) or cls._contains_any(normalized, _SOLVE_KEYWORDS):
+            return False
+        return True
+
     def classify(self, *, question: str, history: Sequence[ChatTurn] = ()) -> RAGIntent:
         _ = history
         normalized = self._normalize(question)
         if self._is_smalltalk(question):
             return RAGIntent.SMALLTALK
-        if self._contains_any(normalized, _TOPIC_LOCATOR_KEYWORDS) or self._is_chapter_title_query(question):
+        if (
+            self._contains_any(normalized, _TOPIC_LOCATOR_KEYWORDS)
+            or self._is_chapter_title_query(question)
+            or self._looks_like_topic_locator(question)
+        ):
             return RAGIntent.TOPIC_LOCATOR
         if self._contains_any(normalized, _PRACTICE_KEYWORDS):
             return RAGIntent.PRACTICE_GENERATION

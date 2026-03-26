@@ -119,11 +119,38 @@ _QUESTION_SHEET_MARKERS = {
     "از ضمیمه",
 }
 
+_GROUNDED_CITATION_FEWSHOT = (
+    "نمونهٔ کوتاهِ سبک پاسخ (بدون ارجاع درون‌متنی):\n"
+    "«قانون دوم نیوتن رابطهٔ نیرو و شتاب را بیان می‌کند و به صورت F = m a نوشته می‌شود.»\n"
+)
+
 
 def detect_answer_language(question: str, default_language: str = 'fa') -> str:
     normalized = (default_language or 'fa').strip().lower()
-    if normalized in {'', 'auto', 'match-user'}:
+    if normalized in {'', 'auto'}:
         # Product default: prioritize Dari for Afghanistan-first tutoring UX.
+        return 'دری'
+    if normalized == 'match-user':
+        # Heuristic language matching (script + a few high-signal markers).
+        if re.search(r"[ټځڅډړږښګڼۍې]", question):
+            return 'پښتو'
+        if re.search(r"[a-z]", question.lower()):
+            return 'English'
+
+        normalized_question = _normalize_question(question)
+        if re.search(r"[ةىؤإأ]", question) or any(
+            marker in normalized_question
+            for marker in (
+                "اشرح",
+                "كيف",
+                "لماذا",
+                "ماذا",
+                "ما هو",
+                "ما هي",
+                "في",
+            )
+        ):
+            return 'العربية'
         return 'دری'
     return LANGUAGE_LABELS.get(normalized, 'دری')
 
@@ -191,13 +218,13 @@ def _grounded_task_directive(*, question: str, hits: Sequence[Hit], intent: str)
     if flavor == "topic_locator":
         directive = (
             "اگر پرسش کاربر از نوع «کجا پیدا می‌شود» بود، پاسخ را فهرست‌محور بده: "
-            "فصل/مبحث، بازه صفحه، و یک جمله دلیل با ارجاع [S# p.N]. "
+            "فصل/مبحث، بازه صفحه، و یک جمله دلیل. "
             "اگر چند گزینه نزدیک بود، آن‌ها را به ترتیب احتمال بیاور."
         )
     elif flavor == "practice_generation":
         directive = (
             "اگر پرسش کاربر از نوع تمرین‌سازی بود، 3 تا 5 سوال سطح‌مناسب بساز، "
-            "برای هر سوال پاسخ‌کلید کوتاه بده و کنار هر پاسخ ارجاع [S#] بگذار."
+            "برای هر سوال پاسخ‌کلید کوتاه بده."
         )
     elif flavor == "solve":
         if question_sheet:
@@ -215,7 +242,7 @@ def _grounded_task_directive(*, question: str, hits: Sequence[Hit], intent: str)
     elif flavor == "explain":
         directive = (
             "اگر پرسش کاربر از نوع توضیح مفهومی بود، ابتدا تعریف کوتاه، سپس نکات کلیدی، "
-            "و در صورت وجود شواهد، یک مثال ساده با ارجاع [S#] ارائه کن."
+            "و در صورت وجود شواهد، یک مثال ساده ارائه کن."
         )
     else:
         directive = (
@@ -284,10 +311,11 @@ def build_system_prompt(
         'شما یک دستیار دقیق آمادگی کانکور هستید. '
         'وظایف اصلی شما: توضیح روشن مفاهیم، مثال حل‌شده، و تمرین‌های فصل‌محور. '
         'برای ادعاهای factual تا حد امکان فقط از شواهد بازیابی‌شده استفاده کنید. '
-        'هر ادعای factual باید ارجاع درون‌متنی داشته باشد؛ مانند [S1] یا [S1 p.42]. '
-        'به منبعی که در context بازیابی‌شده نیست ارجاع ندهید. '
+        'در متن پاسخ هیچ ارجاع درون‌متنی مانند [S1] یا [S1 p.42] تولید نکنید. '
+        'بخش «منابع/References» را هم تولید نکنید؛ سیستم در پایان پاسخ منابع را اضافه می‌کند. '
+        'به منبعی که در context بازیابی‌شده نیست تکیه نکنید. '
         'اگر شواهد ضعیف یا متناقض بود، محدودیت را صریح بگویید. '
-        'اگر کاربر سوال تمرینی خواست، سوال مناسب سطح، پاسخ‌کلید، و ارجاع منبع برای هر پاسخ ارائه کنید. '
+        'اگر کاربر سوال تمرینی خواست، سوال مناسب سطح و پاسخ‌کلید کوتاه ارائه کنید. '
         'هیچ واقعیت یا پاسخ‌کلید بدون پشتوانه نسازید. '
         'پاسخ را با Markdown تمیز بنویسید: پاراگراف کوتاه، مراحل شماره‌دار، و برای فرمول‌ها block کد. '
         'فقط زمانی جدول Markdown بسازید که مقایسه را واضح‌تر کند. '
@@ -348,8 +376,10 @@ def build_chat_messages(
             f'متن بازیابی‌شده:\n{context_block}\n\n'
             f'پرسش کاربر: {question}\n\n'
             f'{runtime_prefix}'
+            f'{_GROUNDED_CITATION_FEWSHOT}\n'
             'برای ادعاهای factual فقط از شواهد بالا استفاده کن. '
-            'ارجاع درون‌متنی [S#] یا [S# p.N] بده، پاسخ را Markdown و آموزشی نگه دار.'
+            'در متن پاسخ هیچ ارجاع درون‌متنی مانند [S1] تولید نکن و بخش «منابع/References» هم نساز. '
+            'پاسخ را Markdown و آموزشی نگه دار.'
         )
     elif (intent or "").strip().lower() == "study_coach":
         user_prompt = (
