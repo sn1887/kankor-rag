@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="${ROOT_DIR}/docker/docker-compose.openwebui.yml"
 DEFAULT_ENV_FILE="${ROOT_DIR}/docker/.env"
+if [[ -f "${ROOT_DIR}/docker/.env.gemini" ]]; then
+  DEFAULT_ENV_FILE="${ROOT_DIR}/docker/.env.gemini"
+fi
 WAIT_TIMEOUT_SECONDS="${OPENWEBUI_LOCAL_WAIT_TIMEOUT_SECONDS:-120}"
 WAIT_INTERVAL_SECONDS="${OPENWEBUI_LOCAL_WAIT_INTERVAL_SECONDS:-2}"
 

@@ -17,6 +17,12 @@ def test_resolved_chat_api_key_falls_back_to_compat_key(monkeypatch) -> None:
     assert settings.resolved_chat_api_key == "compat-key"
 
 
+def test_resolved_openai_compat_model_alias_strips_whitespace(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_OPENAI_COMPAT_MODEL_ALIAS", "  KARDAN GPT  ")
+    settings = Settings()
+    assert settings.resolved_openai_compat_model_alias == "KARDAN GPT"
+
+
 def test_resolved_gemini_api_key_prefers_rag_key(monkeypatch) -> None:
     monkeypatch.setenv("RAG_GEMINI_API_KEY", "gemini-rag")
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-env")

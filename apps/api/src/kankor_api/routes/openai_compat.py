@@ -60,15 +60,24 @@ def _active_model_id() -> str:
     return get_app_state().settings.active_llm_model_id
 
 
+def _public_model_id() -> str:
+    settings = get_app_state().settings
+    alias = settings.resolved_openai_compat_model_alias
+    if alias:
+        return alias
+    return settings.active_llm_model_id
+
+
 def _resolve_response_model(requested_model: str | None) -> str:
     active_model = _active_model_id()
+    public_model = _public_model_id()
     candidate = (requested_model or '').strip()
-    if candidate and candidate != active_model:
+    if candidate and candidate not in {active_model, public_model}:
         raise HTTPException(
             status_code=400,
-            detail=f'model "{candidate}" is not available. Use "{active_model}".',
+            detail=f'model "{candidate}" is not available. Use "{public_model}".',
         )
-    return active_model
+    return public_model
 
 
 def _resolve_requested_max_tokens(request: ChatCompletionsRequest) -> int | None:
@@ -84,7 +93,7 @@ def _resolve_requested_max_tokens(request: ChatCompletionsRequest) -> int | None
 def list_models(authorization: str | None = Header(default=None, alias='Authorization')) -> dict:
     _check_openai_compat_key(authorization)
     created = int(time.time())
-    model_id = _active_model_id()
+    model_id = _public_model_id()
     return {
         'object': 'list',
         'data': [

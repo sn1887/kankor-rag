@@ -57,6 +57,7 @@ class _FakePipelineWithRefs(_FakePipeline):
 class _FakeSettings:
     rag_openai_compat_api_key = None
     active_llm_model_id = "gpt-4o-mini"
+    resolved_openai_compat_model_alias = None
 
 
 def _patch_state(monkeypatch) -> None:
@@ -141,3 +142,30 @@ def test_chat_completions_rejects_conflicting_token_fields(monkeypatch) -> None:
             ),
             authorization=None,
         )
+
+
+def test_list_models_prefers_alias_when_configured(monkeypatch) -> None:
+    settings = _FakeSettings()
+    settings.resolved_openai_compat_model_alias = "KARDAN GPT Flash"
+    state = SimpleNamespace(settings=settings, pipeline=_FakePipeline())
+    monkeypatch.setattr(openai_compat, "get_app_state", lambda: state)
+
+    payload = openai_compat.list_models(authorization=None)
+    assert payload["data"][0]["id"] == "KARDAN GPT Flash"
+
+
+def test_chat_completions_accepts_active_model_when_alias_is_set(monkeypatch) -> None:
+    settings = _FakeSettings()
+    settings.resolved_openai_compat_model_alias = "KARDAN GPT Flash"
+    state = SimpleNamespace(settings=settings, pipeline=_FakePipeline())
+    monkeypatch.setattr(openai_compat, "get_app_state", lambda: state)
+    response = openai_compat.chat_completions(
+        openai_compat.ChatCompletionsRequest(
+            model="gpt-4o-mini",
+            messages=[openai_compat.OpenAIMessageIn(role="user", content="hello")],
+            stream=False,
+        ),
+        authorization=None,
+    )
+    payload = json.loads(response.body.decode("utf-8"))
+    assert payload["model"] == "KARDAN GPT Flash"

@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     rag_deepseek_timeout_seconds: float = Field(default=120.0, alias='RAG_DEEPSEEK_TIMEOUT_SECONDS')
     rag_deepseek_embedding_dimensions: int | None = Field(default=None, alias='RAG_DEEPSEEK_EMBEDDING_DIMENSIONS')
     rag_openai_compat_api_key: str | None = Field(default=None, alias='RAG_OPENAI_COMPAT_API_KEY')
+    rag_openai_compat_model_alias: str | None = Field(default=None, alias='RAG_OPENAI_COMPAT_MODEL_ALIAS')
     rag_chat_api_key: str | None = Field(default=None, alias='RAG_CHAT_API_KEY')
     rag_index_path: str = Field(default='data/sample_index/index.faiss', alias='RAG_INDEX_PATH')
     rag_docstore_path: str = Field(default='data/sample_index/metadata.jsonl', alias='RAG_DOCSTORE_PATH')
@@ -176,6 +177,11 @@ class Settings(BaseSettings):
             return chat_key
         compat_key = (self.rag_openai_compat_api_key or '').strip()
         return compat_key or None
+
+    @property
+    def resolved_openai_compat_model_alias(self) -> str | None:
+        alias = (self.rag_openai_compat_model_alias or '').strip()
+        return alias or None
 
     @staticmethod
     def _first_non_empty(*values: str | None) -> str | None:
