@@ -13,6 +13,13 @@ from rag_core.contracts.embeddings import Embedder
 from rag_core.contracts.vector_store import VectorStore
 from rag_core.rag.toc_locator import TOCIndex
 from rag_core.types import Document, Hit
+from rag_core.util.query_normalization import (
+    canonicalize_subject,
+    extract_grade_hint,
+    extract_subject_hint,
+    normalize_query_text,
+    subject_hint_from_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,23 +34,7 @@ DEFAULT_AMBIGUITY_TOP_N = 5
 DEFAULT_AMBIGUITY_MIN_SUBJECTS = 3
 DEFAULT_AMBIGUITY_DOMINANCE_THRESHOLD = 0.50
 
-_DIACRITICS_PATTERN = re.compile(r"[\u0610-\u061A\u064B-\u065F]")
 _NON_TEXT_PATTERN = re.compile(r"[^\w\u0600-\u06FF\s]", flags=re.UNICODE)
-_WHITESPACE_PATTERN = re.compile(r"\s+", flags=re.UNICODE)
-_NUMERAL_TRANSLATION = str.maketrans(
-    "٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹",
-    "01234567890123456789",
-)
-_ARABIC_LETTER_TRANSLATION = str.maketrans(
-    {
-        "ي": "ی",
-        "ك": "ک",
-        "ة": "ه",
-        "ى": "ی",
-        "أ": "ا",
-        "إ": "ا",
-    }
-)
 _PERSON_PHRASES = (
     "چه کسی",
     "کدام شخص",
@@ -69,34 +60,9 @@ _MCQ_OPTION_PATTERN = re.compile(
 )
 _NUMERIC_DATE_PATTERN = re.compile(r"\b(?:[0-9]{3,4})\b")
 
-_SUBJECT_HINTS = {
-    "physics": {"physics", "physic", "فزیک", "فیزیک", "فزیکي"},
-    "mathematics": {"math", "mathematics", "ریاضی", "رياضی", "الجبر"},
-    "chemistry": {"chemistry", "کیمیا", "شیمی"},
-    "biology": {"biology", "بیولوژی", "حیات"},
-    "geography": {"geography", "جغرافیه", "جغرافيا"},
-    "history": {"history", "تاریخ"},
-    "dari": {"dari", "دری", "فارسی"},
-    "pashto": {"pashto", "پشتو", "پښتو"},
-    "islamic_studies": {"islamic", "اسلامیات", "تعلیمات اسلامی"},
-}
-
-_GRADE_HINTS = {
-    "10": {"10", "دهم", "صنف دهم", "grade 10"},
-    "11": {"11", "یازدهم", "صنف یازدهم", "grade 11"},
-    "12": {"12", "دوازدهم", "صنف دوازدهم", "grade 12"},
-}
-
-
 def normalize_retrieval_text(text: str) -> str:
-    normalized = str(text or "")
-    normalized = normalized.replace("\u200c", " ")
-    normalized = normalized.translate(_ARABIC_LETTER_TRANSLATION)
-    normalized = normalized.translate(_NUMERAL_TRANSLATION)
-    normalized = _DIACRITICS_PATTERN.sub("", normalized)
-    normalized = _NON_TEXT_PATTERN.sub(" ", normalized.lower())
-    normalized = _WHITESPACE_PATTERN.sub(" ", normalized).strip()
-    return normalized
+    normalized = normalize_query_text(text)
+    return _NON_TEXT_PATTERN.sub(" ", normalized).strip()
 
 
 def _coerce_optional_int(value: object) -> int | None:
@@ -110,17 +76,11 @@ def _coerce_optional_int(value: object) -> int | None:
 
 
 def _subject_hint_from_text(normalized_text: str) -> str | None:
-    for subject, tokens in _SUBJECT_HINTS.items():
-        if any(token in normalized_text for token in tokens):
-            return subject
-    return None
+    return subject_hint_from_text(normalized_text)
 
 
 def _grade_hint_from_text(normalized_text: str) -> str | None:
-    for grade, tokens in _GRADE_HINTS.items():
-        if any(token in normalized_text for token in tokens):
-            return grade
-    return None
+    return extract_grade_hint(normalized_text)
 
 
 def _extract_mcq_options(raw_query: str) -> tuple[str, ...]:
@@ -228,6 +188,7 @@ class RetrievalDebugTrace:
     reranker_timeout: bool
     reranker_degraded: bool
     reason_flags: tuple[str, ...]
+    toc_trace: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -304,7 +265,10 @@ class DefaultQueryContextBuilder(QueryContextBuilder):
     def _build_toc_candidates(self, raw_query: str) -> tuple[TOCCandidate, ...]:
         if self._toc_index is None:
             return ()
-        hits = self._toc_index.search(question=raw_query, top_k=self._toc_top_k)
+        if hasattr(self._toc_index, "search_with_trace"):
+            hits, _ = self._toc_index.search_with_trace(question=raw_query, top_k=self._toc_top_k)
+        else:
+            hits = self._toc_index.search(question=raw_query, top_k=self._toc_top_k)
         candidates: list[TOCCandidate] = []
         for hit in hits:
             metadata = hit.document.metadata
@@ -338,8 +302,8 @@ class DefaultQueryContextBuilder(QueryContextBuilder):
             normalized_query=normalized,
             canonical_tokens=canonical_tokens,
             detected_intents=detected_intents,
-            subject_hint=_subject_hint_from_text(normalized),
-            grade_hint=_grade_hint_from_text(normalized),
+            subject_hint=extract_subject_hint(normalized),
+            grade_hint=extract_grade_hint(normalized),
             mcq_options=mcq_options,
             toc_candidates=self._build_toc_candidates(raw),
         )
@@ -355,7 +319,7 @@ def _document_to_candidate(
     metadata = dict(document.metadata or {})
     source_id = str(metadata.get("source_id", "")).strip() or document.id
     chunk_id = str(metadata.get("chunk_id", "")).strip() or document.id
-    subject = str(metadata.get("subject", "")).strip().lower() or None
+    subject = canonicalize_subject(str(metadata.get("subject", "")).strip()) or None
     page_start = _coerce_optional_int(metadata.get("start_page", metadata.get("page")))
     page_end = _coerce_optional_int(metadata.get("end_page", metadata.get("page")))
     if page_end is None:
@@ -504,21 +468,25 @@ class TOCLexicalRetrieverPlugin(RetrieverPlugin):
             return True
         # Avoid TOC-driven routing for entity/date/place queries unless the TOC match is very strong
         # (chapter-number match, or a near-certain title match).
-        if match_kind == "chapter_number":
+        if match_kind in {"chapter_number", "structural_number"}:
             return True
         return hit_score >= 0.92
 
-    async def search(
+    async def search_with_trace(
         self,
         ctx: QueryContext,
         *,
         top_k: int,
         deadline_ms: int,
-    ) -> list[Candidate]:
+    ) -> tuple[list[Candidate], Mapping[str, Any] | None]:
         _ = deadline_ms
         if top_k <= 0:
-            return []
-        hits = self._toc_index.search(question=ctx.raw_query, top_k=max(1, int(top_k)))
+            return [], None
+        if hasattr(self._toc_index, "search_with_trace"):
+            hits, toc_trace = self._toc_index.search_with_trace(question=ctx.raw_query, top_k=max(1, int(top_k)))
+        else:
+            hits = self._toc_index.search(question=ctx.raw_query, top_k=max(1, int(top_k)))
+            toc_trace = None
         candidates: list[Candidate] = []
         for hit in hits:
             score = float(hit.score)
@@ -528,6 +496,16 @@ class TOCLexicalRetrieverPlugin(RetrieverPlugin):
             if not self._allow_for_question(ctx, hit_score=score, match_kind=match_kind):
                 continue
             candidates.append(_document_to_candidate(hit.document, score=score, leg="lexical"))
+        return candidates, toc_trace
+
+    async def search(
+        self,
+        ctx: QueryContext,
+        *,
+        top_k: int,
+        deadline_ms: int,
+    ) -> list[Candidate]:
+        candidates, _ = await self.search_with_trace(ctx, top_k=top_k, deadline_ms=deadline_ms)
         return candidates
 
 
@@ -711,20 +689,27 @@ class RetrievalPipeline:
         top_k: int,
         deadline_ms: int,
         leg_name: Literal["dense", "lexical"],
-    ) -> tuple[list[Candidate], bool, str | None]:
+    ) -> tuple[list[Candidate], bool, str | None, Mapping[str, Any] | None]:
         try:
             timeout_s = max(0.001, float(deadline_ms) / 1000.0)
-            candidates = await asyncio.wait_for(
-                plugin.search(ctx, top_k=top_k, deadline_ms=deadline_ms),
-                timeout=timeout_s,
-            )
-            return list(candidates), False, None
+            if hasattr(plugin, "search_with_trace"):
+                candidates, trace = await asyncio.wait_for(
+                    plugin.search_with_trace(ctx, top_k=top_k, deadline_ms=deadline_ms),
+                    timeout=timeout_s,
+                )
+            else:
+                candidates = await asyncio.wait_for(
+                    plugin.search(ctx, top_k=top_k, deadline_ms=deadline_ms),
+                    timeout=timeout_s,
+                )
+                trace = None
+            return list(candidates), False, None, trace
         except TimeoutError:
             logger.debug("retrieval_leg_timeout leg=%s deadline_ms=%s", leg_name, deadline_ms)
-            return [], True, f"{leg_name}_timeout"
+            return [], True, f"{leg_name}_timeout", None
         except Exception:  # pragma: no cover - defensive path
             logger.exception("retrieval_leg_error leg=%s", leg_name)
-            return [], False, f"{leg_name}_error"
+            return [], False, f"{leg_name}_error", None
 
     async def run(self, ctx: QueryContext) -> LocalizationDecision:
         shared_deadline_ms = self._retrieval_deadline_ms
@@ -749,8 +734,8 @@ class RetrievalPipeline:
                 leg_name="lexical",
             )
         )
-        dense_candidates, dense_timeout, dense_flag = await dense_task
-        lexical_candidates, lexical_timeout, lexical_flag = await lexical_task
+        dense_candidates, dense_timeout, dense_flag, _ = await dense_task
+        lexical_candidates, lexical_timeout, lexical_flag, toc_trace = await lexical_task
         if dense_flag:
             reason_flags.append(dense_flag)
         if lexical_flag:
@@ -809,6 +794,7 @@ class RetrievalPipeline:
             reranker_timeout=reranker_timeout,
             reranker_degraded=reranker_degraded,
             reason_flags=tuple(reason_flags),
+            toc_trace=toc_trace,
         )
         if self._trace_enabled or decision.abstained:
             decision = replace(decision, trace=trace)

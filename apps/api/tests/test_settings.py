@@ -131,3 +131,11 @@ def test_v6_page_localization_min_confidence_is_loaded(monkeypatch) -> None:
     monkeypatch.setenv("RAG_V6_PAGE_LOCALIZATION_MIN_CONFIDENCE", "0.41")
     settings = Settings()
     assert settings.rag_v6_page_localization_min_confidence == 0.41
+
+
+def test_toc_routing_mode_settings_are_loaded(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_TOC_ROUTING_MODE", "safe_topic_aware")
+    monkeypatch.setenv("RAG_TOC_TRACE_SAMPLE_RATE", "0.25")
+    settings = Settings()
+    assert settings.rag_toc_routing_mode == "safe_topic_aware"
+    assert settings.rag_toc_trace_sample_rate == 0.25

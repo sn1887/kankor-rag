@@ -127,6 +127,9 @@ def test_build_toc_manifest_flattens_frontmatter_rows_and_preserves_audit_fields
     assert chapter_1["end_page"] == 16
     assert chapter_1["heading_source"] == "frontmatter_toc_mapped:topic_title"
     assert chapter_1["mapping_warnings"] == ["chapters[1].start_page mapped to 9, outside 1-122."]
+    assert chapter_1["structural_kind"] == "chapter"
+    assert chapter_1["structural_ordinal"] == "1"
+    assert chapter_1["structural_ordinal_source"] == "explicit_title_number"
 
     chapter_2 = rows[1]
     assert chapter_2["chapter_number"] == "2"
@@ -140,6 +143,9 @@ def test_build_toc_manifest_flattens_frontmatter_rows_and_preserves_audit_fields
         "chapters[2].end_page mapped to 130, outside 1-122.",
         "end_page 130 exceeds pdf_page_count 122; clamped to 122.",
     ]
+    assert chapter_2["structural_kind"] == "chapter"
+    assert chapter_2["structural_ordinal"] == "2"
+    assert chapter_2["structural_ordinal_source"] == "explicit_title_number"
 
     index = TOCIndex.load(output_path)
     hits = index.search(question="فصل دوم کتاب بیولوژی صنف دهم چیست؟", top_k=3)
@@ -210,8 +216,12 @@ def test_build_toc_manifest_lifts_topics_when_chapters_are_contents_only(tmp_pat
     assert rows[0]["chapter_number"] == "1"
     assert rows[0]["chapter_title"] == "1 WATER"
     assert rows[0]["start_page"] == 10
+    assert rows[0]["structural_kind"] == "topic"
+    assert rows[0]["structural_ordinal"] == "1"
+    assert rows[0]["structural_ordinal_source"] == "explicit_title_number"
     assert rows[1]["chapter_number"] == "2"
     assert rows[1]["chapter_title"] == "2 CONSERVATION"
+    assert rows[1]["structural_ordinal"] == "2"
 
     index = TOCIndex.load(output_path)
     hits = index.search(question="Water کجاست؟", top_k=3)
@@ -219,3 +229,39 @@ def test_build_toc_manifest_lifts_topics_when_chapters_are_contents_only(tmp_pat
     assert hits[0].document.metadata.get("source_id") == "G12-Ps-English"
     assert hits[0].document.metadata.get("chapter_number") == "1"
     assert hits[0].document.metadata.get("toc_match_kind") == "title"
+
+
+def test_build_toc_manifest_rebuilds_topic_only_books_with_routing_fields() -> None:
+    module = _load_script_module()
+    source_path = (
+        Path(__file__).resolve().parents[3]
+        / "data"
+        / "index"
+        / "kankor_gemini_pdf_window2"
+        / "frontmatter_toc_mapped.jsonl"
+    )
+    wanted = {
+        "G10-Dr-Islamic_Study_jafari",
+        "G10-Dr-Tafseer",
+        "G11-Dr-History",
+        "G11-Dr-Tafseer",
+        "G12-Ps-English",
+    }
+    frontmatter_rows: list[dict] = []
+    with source_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            row = json.loads(line)
+            if row.get("source_id") in wanted:
+                frontmatter_rows.append(row)
+
+    rows = module.build_frontmatter_toc_rows(frontmatter_rows)
+    rebuilt_sources = {str(row.get("source_id", "")).strip() for row in rows}
+    assert rebuilt_sources == wanted
+
+    for row in rows:
+        assert row["toc_entry_kind"] == "topic"
+        assert row["structural_kind"] in {"chapter", "lesson", "unit", "topic"}
+        assert "structural_ordinal" in row
+        assert "structural_ordinal_source" in row
+        if row["source_id"] in {"G10-Dr-Tafseer", "G11-Dr-Tafseer", "G12-Ps-English"}:
+            assert row["structural_ordinal"]

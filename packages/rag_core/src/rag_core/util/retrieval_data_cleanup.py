@@ -143,6 +143,9 @@ class HeadingCandidate:
             "start_page": self.start_page,
             "end_page": self.end_page,
             "line_text": self.line_text,
+            "structural_kind": "chapter",
+            "structural_ordinal": self.chapter_number,
+            "structural_ordinal_source": "explicit_title_number",
             "heading_source": self.origin,
             "heading_score": round(self.score, 3),
         }

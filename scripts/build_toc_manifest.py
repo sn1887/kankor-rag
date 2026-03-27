@@ -10,12 +10,14 @@ from typing import Any
 
 try:
     from rag_core.util.retrieval_data_cleanup import build_clean_toc_rows
+    from rag_core.util.query_normalization import extract_leading_ordinal, normalize_query_text
 except ModuleNotFoundError:
     repo_root = Path(__file__).resolve().parents[1]
     import sys
 
     sys.path.insert(0, str(repo_root / "packages" / "rag_core" / "src"))
     from rag_core.util.retrieval_data_cleanup import build_clean_toc_rows
+    from rag_core.util.query_normalization import extract_leading_ordinal, normalize_query_text
 
 
 _CHAPTER_TOKEN_MAP = {
@@ -89,6 +91,9 @@ class TOCCandidate:
     start_page: int
     end_page: int
     line_text: str
+    structural_kind: str = "chapter"
+    structural_ordinal: str | None = None
+    structural_ordinal_source: str | None = "explicit_title_number"
 
     @property
     def sort_key(self) -> tuple[str, int, int]:
@@ -111,6 +116,9 @@ class TOCCandidate:
             "start_page": self.start_page,
             "end_page": self.end_page,
             "line_text": self.line_text,
+            "structural_kind": self.structural_kind,
+            "structural_ordinal": self.structural_ordinal or self.chapter_number,
+            "structural_ordinal_source": self.structural_ordinal_source,
         }
 
 
@@ -197,6 +205,56 @@ def _chapter_number_variants(chapter_number: str) -> set[str]:
     if not normalized:
         return set()
     return _CHAPTER_NUMBER_VARIANTS.get(normalized, {normalized})
+
+
+def _frontmatter_notes_indicate_sequential_topics(notes: Sequence[str]) -> bool:
+    normalized_notes = [normalize_query_text(note) for note in notes]
+    if not normalized_notes:
+        return False
+    sequence_markers = (
+        "sequential",
+        "topics numbered sequentially",
+        "without chapters",
+        "without broad sections",
+        "lessons",
+        "units",
+        "chapters",
+        "topics only",
+        "topic only",
+    )
+    return any(any(marker in note for marker in sequence_markers) for note in normalized_notes)
+
+
+def _topic_structural_kind(*, topic_title: str, notes: Sequence[str]) -> str:
+    normalized_title = normalize_query_text(topic_title)
+    normalized_notes = " ".join(normalize_query_text(note) for note in notes if note)
+    if normalized_title.startswith("lesson ") or normalized_title.startswith("درس "):
+        return "lesson"
+    if normalized_title.startswith("unit "):
+        return "unit"
+    if "lesson" in normalized_notes or "درس" in normalized_notes:
+        return "lesson"
+    if "unit" in normalized_notes:
+        return "unit"
+    if "no chapters" in normalized_notes or "without chapters" in normalized_notes:
+        return "topic"
+    if "chapter" in normalized_notes:
+        return "chapter"
+    return "topic"
+
+
+def _topic_structural_ordinal(
+    *,
+    topic_title: str,
+    topic_index: int,
+    notes: Sequence[str],
+) -> tuple[str | None, str | None]:
+    explicit = extract_leading_ordinal(topic_title)
+    if explicit is not None:
+        return explicit, "explicit_title_number"
+    if _frontmatter_notes_indicate_sequential_topics(notes):
+        return str(topic_index), "topic_sequence_from_contents_only_book"
+    return None, None
 
 
 def _is_summary_or_frontmatter_title(title: str) -> bool:
@@ -354,6 +412,11 @@ def build_frontmatter_toc_rows(frontmatter_rows: list[dict[str, Any]]) -> list[d
                             if not topic_title or _is_summary_or_frontmatter_title(topic_title):
                                 continue
                             topic_number = _coerce_chapter_number(topic_title) or str(topic_index)
+                            structural_ordinal, structural_ordinal_source = _topic_structural_ordinal(
+                                topic_title=topic_title,
+                                topic_index=topic_index,
+                                notes=notes,
+                            )
                             topic_start_page = _coerce_positive_int(topic.get("start_page"))
                             topic_end_page = _coerce_positive_int(topic.get("end_page"))
                             if topic_start_page is None or topic_end_page is None:
@@ -389,6 +452,9 @@ def build_frontmatter_toc_rows(frontmatter_rows: list[dict[str, Any]]) -> list[d
                                 "end_page": topic_end_page,
                                 "line_text": topic_title,
                                 "toc_entry_kind": "topic",
+                                "structural_kind": _topic_structural_kind(topic_title=topic_title, notes=notes),
+                                "structural_ordinal": structural_ordinal,
+                                "structural_ordinal_source": structural_ordinal_source,
                                 "heading_source": "frontmatter_toc_mapped:topic_only",
                                 "heading_score": 7.25,
                                 "source_type": source_type,
@@ -461,6 +527,9 @@ def build_frontmatter_toc_rows(frontmatter_rows: list[dict[str, Any]]) -> list[d
                 "end_page": chapter_end_page,
                 "line_text": display_title,
                 "toc_entry_kind": "chapter",
+                "structural_kind": "chapter",
+                "structural_ordinal": chapter_number,
+                "structural_ordinal_source": "explicit_title_number",
                 "heading_source": heading_source,
                 "heading_score": heading_score,
                 "source_type": source_type,
@@ -547,6 +616,9 @@ def _extract_candidate_from_line(
         start_page=start_page,
         end_page=end_page,
         line_text=line,
+        structural_kind="chapter",
+        structural_ordinal=chapter_number,
+        structural_ordinal_source="explicit_title_number",
     )
 
 

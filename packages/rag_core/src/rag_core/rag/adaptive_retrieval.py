@@ -6,6 +6,13 @@ import re
 
 from rag_core.contracts.vector_store import VectorStore
 from rag_core.types import Document, Hit
+from rag_core.util.query_normalization import (
+    canonicalize_subject,
+    extract_grade_hint,
+    extract_structural_reference,
+    extract_subject_hint,
+    normalize_query_text,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,110 +177,23 @@ def _iter_vector_store_documents(vector_store: VectorStore) -> Sequence[Document
     return ()
 
 
-_CHAPTER_NUMBER_TOKEN_MAP = {
-    "1": "1",
-    "اول": "1",
-    "نخست": "1",
-    "یکم": "1",
-    "۱": "1",
-    "2": "2",
-    "دوم": "2",
-    "دوهم": "2",
-    "ثانی": "2",
-    "۲": "2",
-    "3": "3",
-    "سوم": "3",
-    "درېم": "3",
-    "۳": "3",
-    "4": "4",
-    "چهارم": "4",
-    "څلورم": "4",
-    "۴": "4",
-    "5": "5",
-    "پنجم": "5",
-    "۵": "5",
-    "6": "6",
-    "ششم": "6",
-    "۶": "6",
-    "7": "7",
-    "هفتم": "7",
-    "۷": "7",
-    "8": "8",
-    "هشتم": "8",
-    "۸": "8",
-    "9": "9",
-    "نهم": "9",
-    "۹": "9",
-    "10": "10",
-    "دهم": "10",
-    "لسم": "10",
-    "۱۰": "10",
-    "11": "11",
-    "یازدهم": "11",
-    "۱۱": "11",
-    "12": "12",
-    "دوازدهم": "12",
-    "۱۲": "12",
-}
-
-_SUBJECT_HINTS = {
-    "physics": {"physics", "physic", "فزیک", "فیزیک", "فزیکي"},
-    "mathematics": {"math", "mathematics", "ریاضی", "رياضی", "الجبر"},
-    "chemistry": {"chemistry", "کیمیا", "شیمی"},
-    "biology": {"biology", "بیولوژی", "حیات"},
-    "geography": {"geography", "جغرافیه", "جغرافيا"},
-    "history": {"history", "تاریخ"},
-    "dari": {"dari", "دری", "فارسی"},
-    "english": {"english", "انگلیسی", "انگليسي"},
-}
-
-_GRADE_HINT_TOKENS = {
-    "10": {"10", "۱۰", "دهم", "صنف دهم", "grade 10"},
-    "11": {"11", "۱۱", "یازدهم", "صنف یازدهم", "grade 11"},
-    "12": {"12", "۱۲", "دوازدهم", "صنف دوازدهم", "grade 12"},
-}
-
-
 def _normalize_text(text: str) -> str:
-    cleaned = re.sub(r"[^\w\u0600-\u06FF\s]", " ", text.lower(), flags=re.UNICODE)
-    return re.sub(r"\s+", " ", cleaned, flags=re.UNICODE).strip()
+    return normalize_query_text(text)
 
 
 def _extract_chapter_number(question: str) -> str | None:
-    normalized = _normalize_text(question)
-    if not normalized:
+    reference = extract_structural_reference(question)
+    if reference is None:
         return None
-    explicit = re.search(
-        r"(?:chapter|chap|فصل|باب)\s+([0-9۰-۹]{1,2}|[a-z\u0600-\u06FF]+)",
-        normalized,
-        flags=re.IGNORECASE | re.UNICODE,
-    )
-    if explicit:
-        token = explicit.group(1).strip().lower()
-        mapped = _CHAPTER_NUMBER_TOKEN_MAP.get(token)
-        if mapped:
-            return mapped
-    for token in normalized.split():
-        mapped = _CHAPTER_NUMBER_TOKEN_MAP.get(token.strip().lower())
-        if mapped is not None:
-            return mapped
-    return None
+    return reference.number
 
 
 def _extract_subject_hint(question: str) -> str | None:
-    normalized = _normalize_text(question)
-    for subject, terms in _SUBJECT_HINTS.items():
-        if any(term in normalized for term in terms):
-            return subject
-    return None
+    return extract_subject_hint(question)
 
 
 def _extract_grade_hint(question: str) -> str | None:
-    normalized = _normalize_text(question)
-    for grade, terms in _GRADE_HINT_TOKENS.items():
-        if any(term in normalized for term in terms):
-            return grade
-    return None
+    return extract_grade_hint(question)
 
 
 def _chapter_query_variants(chapter_number: str) -> tuple[str, ...]:
@@ -315,7 +235,7 @@ def find_topic_locator_chapter_hits(
         metadata = document.metadata
         score = 0.42 + (0.08 * float(match_count))
 
-        subject = str(metadata.get("subject", "")).strip().lower()
+        subject = canonicalize_subject(str(metadata.get("subject", "")).strip())
         if subject_hint:
             if subject == subject_hint:
                 score += 0.12
@@ -353,7 +273,7 @@ def filter_topic_locator_hits(
     filtered: list[Hit] = []
     for hit in hits:
         metadata = hit.document.metadata
-        subject = str(metadata.get("subject", "")).strip().lower()
+        subject = canonicalize_subject(str(metadata.get("subject", "")).strip())
         grade = str(metadata.get("grade_band", "")).strip()
         if subject_hint and subject and subject != subject_hint:
             continue

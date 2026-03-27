@@ -16,6 +16,7 @@ from rag_core.rag.retrieval_reliability import (
     FusionPolicy,
     LexicalRetrieverPlugin,
     LocalizationDecision,
+    NoopRetrieverPlugin,
     QueryContext,
     QueryContextBuilder,
     RRFFusionPolicy,
@@ -24,6 +25,7 @@ from rag_core.rag.retrieval_reliability import (
     RetrieverPlugin,
     RerankerPlugin,
     StableIdentityRerankerPlugin,
+    TOCLexicalRetrieverPlugin,
 )
 from rag_core.types import Document, Hit
 from rag_core.rag.toc_locator import TOCEntry, TOCIndex
@@ -183,6 +185,46 @@ def test_default_plugins_return_candidate_shapes() -> None:
     assert dense and isinstance(dense[0], Candidate)
     assert lexical and isinstance(lexical[0], Candidate)
     assert dense[0].matched_terms == ()
+
+
+def test_retrieval_pipeline_trace_includes_toc_trace_when_toc_lexical_plugin_is_used() -> None:
+    toc_index = TOCIndex(
+        entries=[
+            TOCEntry(
+                source_id="G12-Ps-English",
+                title="G12-Ps-English",
+                subject="english",
+                grade_band="12",
+                chapter_number="11",
+                chapter_title="11 CALLIGRAPHY",
+                page=144,
+                start_page=144,
+                end_page=158,
+                line_text="11 CALLIGRAPHY",
+                source_pdf_path="x.pdf",
+                toc_entry_kind="topic",
+                structural_kind="unit",
+                structural_ordinal="11",
+                structural_ordinal_source="explicit_title_number",
+            )
+        ],
+        routing_mode="safe_topic_aware",
+    )
+    pipeline = RetrievalPipeline(
+        dense=NoopRetrieverPlugin(),
+        lexical=TOCLexicalRetrieverPlugin(toc_index=toc_index),
+        fusion=RRFFusionPolicy(rrf_k=20),
+        reranker=StableIdentityRerankerPlugin(),
+        decision=DefaultLocalizationDecisionPolicy(page_localization_min_confidence=0.1),
+        top_k=3,
+        trace_enabled=True,
+    )
+
+    decision = asyncio.run(pipeline.run(_ctx("calligraphy where is it in grade 12 english book?")))
+
+    assert decision.trace is not None
+    assert decision.trace.toc_trace is not None
+    assert decision.trace.toc_trace["source_id"] == "G12-Ps-English"
 
 
 def test_fusion_policy_uses_immutable_replace_and_preserves_original_candidate() -> None:

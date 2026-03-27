@@ -436,7 +436,7 @@ def _build_toc_index(settings: Settings) -> TOCIndex | None:
         toc_path = Path(settings.rag_docstore_path).resolve().parent / "toc_manifest.jsonl"
     if not toc_path.exists():
         return None
-    return TOCIndex.load(toc_path)
+    return TOCIndex.load(toc_path, routing_mode=settings.rag_toc_routing_mode)
 
 
 def _build_whatsapp_runtime(settings: Settings, *, pipeline: RAGPipeline) -> WhatsAppRuntime | None:
@@ -584,6 +584,7 @@ def get_app_state() -> AppState:
         default_language=settings.rag_default_language,
         source_pdf_url_template=settings.rag_source_pdf_url_template,
         references_max_sources=settings.rag_references_max_sources,
+        toc_trace_sample_rate=settings.rag_toc_trace_sample_rate,
         grounding_context_plugin=_build_grounding_context_plugin(settings),
         use_v6_retrieval=settings.rag_use_v6_retrieval,
         v6_query_context_builder=v6_query_context_builder,

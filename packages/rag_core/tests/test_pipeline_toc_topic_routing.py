@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 
 import numpy as np
+import pytest
 
 from rag_core.contracts.embeddings import Embedder
 from rag_core.contracts.llm import LLMProvider
@@ -134,3 +135,55 @@ def test_grounded_intents_consult_toc_and_constrain_page_span() -> None:
     assert sources[0]["sourceId"] == "G10-Dr-Islam"
     assert sources[0]["page"] == 11
 
+
+def test_pipeline_emits_sampled_toc_trace_logs(caplog: pytest.LogCaptureFixture) -> None:
+    toc_index = TOCIndex(
+        entries=[
+            TOCEntry(
+                source_id="G12-Ps-English",
+                title="G12-Ps-English",
+                subject="english",
+                grade_band="12",
+                chapter_number="11",
+                chapter_title="11 CALLIGRAPHY",
+                page=144,
+                start_page=144,
+                end_page=158,
+                line_text="11 CALLIGRAPHY",
+                source_pdf_path="data/raw_pdfs/grade_12/G12-Ps-English.pdf",
+                toc_entry_kind="topic",
+                structural_kind="unit",
+                structural_ordinal="11",
+                structural_ordinal_source="explicit_title_number",
+            )
+        ],
+        routing_mode="safe_topic_aware",
+    )
+    store = _FilterableStore(
+        hits=[
+            Hit(
+                document=Document(
+                    id="inside",
+                    text="Inside span",
+                    metadata={"source_id": "G12-Ps-English", "page": 145},
+                ),
+                score=0.9,
+            )
+        ]
+    )
+    pipeline = RAGPipeline(
+        llm=_NoopLLM(),
+        embedder=_DummyEmbedder(),
+        vector_store=store,
+        corpus_version="test",
+        intent_router=_StaticRouter(),  # type: ignore[arg-type]
+        toc_index=toc_index,
+        min_score=0.0,
+        local_expansion_neighbors=0,
+        toc_trace_sample_rate=1.0,
+    )
+
+    caplog.set_level("DEBUG")
+    list(pipeline.stream_answer(question="unit 11 in grade 12 english book", history=[]))
+
+    assert any("toc_routing_trace" in record.message for record in caplog.records)

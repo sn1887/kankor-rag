@@ -77,6 +77,8 @@ class Settings(BaseSettings):
     )
     rag_top_k: int = Field(default=5, alias='RAG_TOP_K')
     rag_references_max_sources: int = Field(default=3, alias='RAG_REFERENCES_MAX_SOURCES')
+    rag_toc_routing_mode: str = Field(default='legacy', alias='RAG_TOC_ROUTING_MODE')
+    rag_toc_trace_sample_rate: float = Field(default=0.0, alias='RAG_TOC_TRACE_SAMPLE_RATE')
     # Feature flag for hybrid retrieval v6 (dense + lexical + fusion + decision). Keep off by default.
     rag_use_v6_retrieval: bool = Field(default=False, alias='RAG_USE_V6_RETRIEVAL')
     # v6-only: minimum confidence required to localize to a page; if below this, v6 abstains/asks for clarification.

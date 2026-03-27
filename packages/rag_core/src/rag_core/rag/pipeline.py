@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 import logging
+import random
 import re
 
 import numpy as np
@@ -118,6 +119,7 @@ class RAGPipeline:
         use_v6_retrieval: bool = False,
         v6_query_context_builder: QueryContextBuilder | None = None,
         v6_retrieval_pipeline: V6RetrievalPipeline | None = None,
+        toc_trace_sample_rate: float = 0.0,
     ) -> None:
         self.llm = llm
         self.embedder = embedder
@@ -152,6 +154,7 @@ class RAGPipeline:
         self.use_v6_retrieval = bool(use_v6_retrieval)
         self.v6_query_context_builder = v6_query_context_builder
         self.v6_retrieval_pipeline = v6_retrieval_pipeline
+        self.toc_trace_sample_rate = max(0.0, min(1.0, float(toc_trace_sample_rate)))
 
     @staticmethod
     def _normalize_user_text(text: str) -> str:
@@ -325,6 +328,30 @@ class RAGPipeline:
                 return top
         return None
 
+    def _should_sample_toc_trace(self) -> bool:
+        if self.toc_trace_sample_rate <= 0.0:
+            return False
+        if self.toc_trace_sample_rate >= 1.0:
+            return True
+        return random.random() < self.toc_trace_sample_rate
+
+    def _log_toc_trace(
+        self,
+        *,
+        intent: RAGIntent,
+        trace: dict | None,
+        retrieval_mode: str,
+        retrieval_params: dict[str, object] | None = None,
+    ) -> None:
+        if trace is None or not self._should_sample_toc_trace():
+            return
+        payload = dict(trace)
+        payload["intent"] = intent.value
+        payload["retrieval_mode"] = retrieval_mode
+        if retrieval_params:
+            payload["retrieval_params"] = dict(retrieval_params)
+        logger.debug("toc_routing_trace %s", payload)
+
     def resolve_generation_params(
         self,
         *,
@@ -389,6 +416,7 @@ class RAGPipeline:
                         "dense_timeout": bool(getattr(trace, "dense_timeout", False)),
                         "lexical_timeout": bool(getattr(trace, "lexical_timeout", False)),
                         "reranker_timeout": bool(getattr(trace, "reranker_timeout", False)),
+                        "toc_trace": getattr(trace, "toc_trace", None),
                     },
                 )
 
@@ -415,7 +443,7 @@ class RAGPipeline:
                     match_kind = str(toc_candidate.metadata.get("toc_match_kind", "")).strip().lower()
                     use_toc_route = toc_score >= 0.75
                     if {"person", "date", "place"} & set(ctx.detected_intents):
-                        use_toc_route = match_kind == "chapter_number" or toc_score >= 0.92
+                        use_toc_route = match_kind in {"chapter_number", "structural_number"} or toc_score >= 0.92
 
                 if toc_candidate is not None and use_toc_route:
                     route_meta = dict(toc_candidate.metadata)
@@ -440,24 +468,54 @@ class RAGPipeline:
                         )
                     if not hits:
                         hits = self.retrieve_many(queries)
+                    self._log_toc_trace(
+                        intent=intent,
+                        trace=getattr(trace, "toc_trace", None),
+                        retrieval_mode="v6_toc_constrained",
+                        retrieval_params={
+                            "filters": filters,
+                            "page_span": page_span,
+                        },
+                    )
                 else:
                     hits = localization_decision_to_hits(decision)
+                    self._log_toc_trace(
+                        intent=intent,
+                        trace=getattr(trace, "toc_trace", None),
+                        retrieval_mode="v6_localization",
+                    )
             else:
                 toc_hits: list[Hit] = []
                 toc_route: Hit | None = None
                 toc_short_circuit = False
+                toc_trace: dict | None = None
                 if self.toc_index is not None:
+                    if hasattr(self.toc_index, "search_with_trace"):
+                        toc_search_fn = self.toc_index.search_with_trace
+                    else:
+                        toc_search_fn = None
                     if intent == RAGIntent.TOPIC_LOCATOR:
-                        toc_hits = self.toc_index.search(question=question, top_k=self.top_k)
+                        if toc_search_fn is not None:
+                            toc_hits, toc_trace = toc_search_fn(question=question, top_k=self.top_k)
+                        else:
+                            toc_hits = self.toc_index.search(question=question, top_k=self.top_k)
                     elif intent in {RAGIntent.GROUNDED_TEXTBOOK, RAGIntent.PRACTICE_GENERATION}:
                         # Always consult the TOC for grounded intents. Many lesson/topic titles only exist
                         # in the manifest (not in window-text chunks), so TOC routing is a retrieval-quality win.
-                        toc_hits = self.toc_index.search(question=question, top_k=self.top_k)
+                        if toc_search_fn is not None:
+                            toc_hits, toc_trace = toc_search_fn(question=question, top_k=self.top_k)
+                        else:
+                            toc_hits = self.toc_index.search(question=question, top_k=self.top_k)
                     toc_route = self._select_unambiguous_toc_route(toc_hits)
 
                 if intent == RAGIntent.TOPIC_LOCATOR and toc_route is not None:
                     toc_short_circuit = True
                     hits = list(toc_hits)[: max(1, int(self.top_k))]
+                    self._log_toc_trace(
+                        intent=intent,
+                        trace=toc_trace,
+                        retrieval_mode="legacy_toc_short_circuit",
+                    )
                 elif toc_route is not None and intent in {RAGIntent.GROUNDED_TEXTBOOK, RAGIntent.PRACTICE_GENERATION}:
                     route_meta = toc_route.document.metadata
                     source_id = str(route_meta.get("source_id", "")).strip()
@@ -483,8 +541,22 @@ class RAGPipeline:
                     # Last resort: global retrieval.
                     if not hits:
                         hits = self.retrieve_many(queries)
+                    self._log_toc_trace(
+                        intent=intent,
+                        trace=toc_trace,
+                        retrieval_mode="legacy_toc_constrained",
+                        retrieval_params={
+                            "filters": filters,
+                            "page_span": page_span,
+                        },
+                    )
                 else:
                     hits = self.retrieve_many(queries)
+                    self._log_toc_trace(
+                        intent=intent,
+                        trace=toc_trace,
+                        retrieval_mode="legacy_global",
+                    )
                 if intent == RAGIntent.TOPIC_LOCATOR:
                     if not toc_short_circuit:
                         if toc_hits:
