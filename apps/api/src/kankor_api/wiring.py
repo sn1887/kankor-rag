@@ -8,6 +8,7 @@ from typing import Callable, TypeVar, cast
 
 from rag_core.contracts.embeddings import Embedder
 from rag_core.contracts.llm import LLMProvider
+from rag_core.contracts.reranker import NoopReranker, Reranker
 from rag_core.contracts.vector_store import VectorStore
 from rag_core.impl.embeddings_deepseek import DeepSeekEmbedder
 from rag_core.impl.embeddings_e5 import HashingEmbedder, MultilingualE5Embedder
@@ -18,6 +19,7 @@ from rag_core.impl.llm_gemini import GeminiLLMProvider
 from rag_core.impl.llm_gemini_native import GeminiNativeLLMProvider
 from rag_core.impl.llm_openai import OpenAILLMProvider
 from rag_core.impl.llm_transformers import TransformersLLMProvider
+from rag_core.impl.reranker_hf import HFSequenceClassificationReranker
 from rag_core.impl.vector_faiss import FaissVectorStore
 from rag_core.rag.adaptive_retrieval import TopicLocatorFrontMatterPolicy
 from rag_core.rag.context_plugins import (
@@ -213,6 +215,19 @@ def _build_faiss_vector_store(settings: Settings) -> VectorStore:
     return FaissVectorStore.load(index_path=settings.rag_index_path, metadata_path=metadata_path)
 
 
+def _build_noop_reranker(_: Settings) -> Reranker:
+    return NoopReranker()
+
+
+def _build_hf_cross_encoder_reranker(settings: Settings) -> Reranker:
+    return HFSequenceClassificationReranker(
+        model_name=settings.rag_reranker_model_id,
+        max_length=settings.rag_reranker_max_length,
+        batch_size=settings.rag_reranker_batch_size,
+        trust_remote_code=True,
+    )
+
+
 def _build_whatsapp_queue_memory(_: Settings) -> JobQueue:
     return InMemoryJobQueue()
 
@@ -318,6 +333,11 @@ LLM_FACTORIES: dict[str, Callable[[Settings], LLMProvider]] = {
 
 VECTOR_STORE_FACTORIES: dict[str, Callable[[Settings], VectorStore]] = {
     "faiss": _build_faiss_vector_store,
+}
+
+RERANKER_FACTORIES: dict[str, Callable[[Settings], Reranker]] = {
+    "noop": _build_noop_reranker,
+    "hf_cross_encoder": _build_hf_cross_encoder_reranker,
 }
 
 WHATSAPP_QUEUE_FACTORIES: dict[str, Callable[[Settings], JobQueue]] = {
@@ -428,6 +448,17 @@ def _build_vector_store(settings: Settings) -> VectorStore:
     return factory(settings)
 
 
+def _build_reranker(settings: Settings) -> Reranker:
+    if not settings.rag_reranker_enabled:
+        return NoopReranker()
+    factory = _resolve_factory(
+        settings.rag_reranker_backend,
+        registry=RERANKER_FACTORIES,
+        kind="reranker",
+    )
+    return factory(settings)
+
+
 def _build_toc_index(settings: Settings) -> TOCIndex | None:
     configured = (settings.rag_toc_manifest_path or "").strip()
     if configured:
@@ -522,6 +553,7 @@ def _build_whatsapp_runtime(settings: Settings, *, pipeline: RAGPipeline) -> Wha
 def get_app_state() -> AppState:
     settings = load_settings()
     vector_store = _build_vector_store(settings)
+    reranker = _build_reranker(settings)
     manifest = load_index_manifest(settings.rag_index_path)
     expected_embedding_dimension = resolve_expected_embedding_dimension(
         settings=settings,
@@ -586,6 +618,8 @@ def get_app_state() -> AppState:
         references_max_sources=settings.rag_references_max_sources,
         toc_trace_sample_rate=settings.rag_toc_trace_sample_rate,
         grounding_context_plugin=_build_grounding_context_plugin(settings),
+        reranker=reranker,
+        reranker_candidate_pool_size=settings.rag_reranker_candidate_pool_size,
         use_v6_retrieval=settings.rag_use_v6_retrieval,
         v6_query_context_builder=v6_query_context_builder,
         v6_retrieval_pipeline=v6_retrieval_pipeline,

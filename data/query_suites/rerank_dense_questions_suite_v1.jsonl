@@ -1,0 +1,7 @@
+{"id":"dense_newton_fa_01","language":"fa","intent":"grounded_textbook","query":"قانون دوم نیوتن را با یک مثال ساده و کوتاه توضیح بده.","citation_required":true,"expected_subjects":["physics"]}
+{"id":"dense_newton_ps_01","language":"ps","intent":"grounded_textbook","query":"د نيوټن دوهم قانون په ساده مثال سره تشريح کړه.","citation_required":true,"expected_subjects":["physics"]}
+{"id":"dense_newton_multiline_fa_01","language":"fa","intent":"grounded_textbook","query":"در سوالات کانکور معمولاً این سه نکته را می‌خواهند:\n1) قانون دوم نیوتن چیست؟\n2) رابطهٔ نیرو، جرم و شتاب چگونه نوشته می‌شود؟\n3) یک مثال کوتاه از کاربرد آن بده.","citation_required":true,"expected_subjects":["physics"]}
+{"id":"dense_atom_fa_01","language":"fa","intent":"grounded_textbook","query":"ساختار اتم چیست و ذرات اصلی آن کدام‌اند؟","citation_required":true,"expected_subjects":["chemistry"]}
+{"id":"dense_cell_fa_01","language":"fa","intent":"grounded_textbook","query":"حجره چیست و اجزای اصلی آن کدام‌اند؟","citation_required":true,"expected_subjects":["biology"]}
+{"id":"dense_cell_ps_01","language":"ps","intent":"grounded_textbook","query":"حجره څه ده او اصلي برخې يې کومې دي؟","citation_required":true,"expected_subjects":["biology"]}
+{"id":"dense_ahmad_shah_fa_01","language":"fa","intent":"grounded_textbook","query":"دربارهٔ احمدشاه بابا به صورت خلاصه معلومات بده.","citation_required":true,"expected_subjects":["history"]}

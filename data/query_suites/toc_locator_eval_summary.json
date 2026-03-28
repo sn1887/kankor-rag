@@ -1,0 +1,104 @@
+{
+  "suite_path": "data/query_suites/toc_locator_suite_v1.jsonl",
+  "manifest_path": "data/index/kankor_gemini_pdf_window2/toc_manifest.jsonl",
+  "routing_mode": "legacy",
+  "top_k": 1,
+  "total_rows": 42,
+  "passed_rows": 14,
+  "failed_rows": 28,
+  "overall_accuracy": 0.3333,
+  "route_rows": 37,
+  "route_passed": 14,
+  "route_accuracy": 0.3784,
+  "abstain_rows": 5,
+  "abstain_passed": 0,
+  "abstain_accuracy": 0.0,
+  "failed_ids": [
+    "toc_g10_dari_01",
+    "toc_g10_dari_03",
+    "toc_g10_dari_06",
+    "toc_g10_jafari_02",
+    "toc_g10_jafari_03",
+    "toc_g10_jafari_04",
+    "toc_g11_history_01",
+    "toc_g11_history_02",
+    "toc_g11_history_04",
+    "toc_g11_history_05",
+    "toc_g11_tafseer_01",
+    "toc_g11_tafseer_03",
+    "toc_g11_tafseer_04",
+    "toc_g11_tafseer_05",
+    "toc_grade10_mixed_01",
+    "toc_grade10_mixed_02",
+    "toc_grade10_mixed_04",
+    "toc_grade10_mixed_05",
+    "toc_g12_english_01",
+    "toc_g12_english_02",
+    "toc_g12_english_03",
+    "toc_g12_english_04",
+    "toc_g12_english_05",
+    "toc_mixed_robust_01",
+    "toc_mixed_robust_02",
+    "toc_mixed_robust_03",
+    "toc_mixed_robust_04",
+    "toc_mixed_robust_05"
+  ],
+  "category_summary": [
+    {
+      "category": "G10_DARI",
+      "total": 6,
+      "passed": 3,
+      "failed": 3,
+      "accuracy": 0.5
+    },
+    {
+      "category": "G10_JAFARI",
+      "total": 6,
+      "passed": 3,
+      "failed": 3,
+      "accuracy": 0.5
+    },
+    {
+      "category": "G10_MIXED",
+      "total": 5,
+      "passed": 1,
+      "failed": 4,
+      "accuracy": 0.2
+    },
+    {
+      "category": "G10_TAFSEER",
+      "total": 5,
+      "passed": 5,
+      "failed": 0,
+      "accuracy": 1.0
+    },
+    {
+      "category": "G11_HISTORY",
+      "total": 5,
+      "passed": 1,
+      "failed": 4,
+      "accuracy": 0.2
+    },
+    {
+      "category": "G11_TAFSEER",
+      "total": 5,
+      "passed": 1,
+      "failed": 4,
+      "accuracy": 0.2
+    },
+    {
+      "category": "G12_ENGLISH",
+      "total": 5,
+      "passed": 0,
+      "failed": 5,
+      "accuracy": 0.0
+    },
+    {
+      "category": "MIXED_ROBUSTNESS",
+      "total": 5,
+      "passed": 0,
+      "failed": 5,
+      "accuracy": 0.0
+    }
+  ]
+}

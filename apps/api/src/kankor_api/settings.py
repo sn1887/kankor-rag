@@ -76,6 +76,12 @@ class Settings(BaseSettings):
         alias='RAG_PDF_WINDOW_ADAPTIVE_COMPLEXITY_LENGTH_TOKENS',
     )
     rag_top_k: int = Field(default=5, alias='RAG_TOP_K')
+    rag_reranker_enabled: bool = Field(default=False, alias='RAG_RERANKER_ENABLED')
+    rag_reranker_backend: str = Field(default='hf_cross_encoder', alias='RAG_RERANKER_BACKEND')
+    rag_reranker_model_id: str = Field(default='BAAI/bge-reranker-v2-m3', alias='RAG_RERANKER_MODEL_ID')
+    rag_reranker_candidate_pool_size: int = Field(default=20, alias='RAG_RERANKER_CANDIDATE_POOL_SIZE')
+    rag_reranker_max_length: int = Field(default=512, alias='RAG_RERANKER_MAX_LENGTH')
+    rag_reranker_batch_size: int = Field(default=8, alias='RAG_RERANKER_BATCH_SIZE')
     rag_references_max_sources: int = Field(default=3, alias='RAG_REFERENCES_MAX_SOURCES')
     rag_toc_routing_mode: str = Field(default='legacy', alias='RAG_TOC_ROUTING_MODE')
     rag_toc_trace_sample_rate: float = Field(default=0.0, alias='RAG_TOC_TRACE_SAMPLE_RATE')

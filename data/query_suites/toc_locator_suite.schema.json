@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kankor-rag.local/schemas/toc_locator_suite.schema.json",
+  "title": "TOC Locator Evaluation Suite Row",
+  "description": "Row schema for topic/chapter locator evaluation suites.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "category",
+    "language",
+    "intent",
+    "query",
+    "expected_behavior"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "category": {
+      "type": "string",
+      "minLength": 1
+    },
+    "language": {
+      "type": "string",
+      "minLength": 1
+    },
+    "intent": {
+      "type": "string",
+      "minLength": 1
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1
+    },
+    "expected_behavior": {
+      "type": "string",
+      "enum": [
+        "route",
+        "abstain"
+      ]
+    },
+    "expected_source_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "expected_chapter_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "expected_title_fragment": {
+      "type": "string",
+      "minLength": 1
+    },
+    "notes": {
+      "type": "string"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "expected_behavior": {
+            "const": "route"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "expected_source_id"
+        ]
+      }
+    }
+  ]
+}

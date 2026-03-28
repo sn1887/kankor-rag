@@ -139,3 +139,19 @@ def test_toc_routing_mode_settings_are_loaded(monkeypatch) -> None:
     settings = Settings()
     assert settings.rag_toc_routing_mode == "safe_topic_aware"
     assert settings.rag_toc_trace_sample_rate == 0.25
+
+
+def test_reranker_settings_are_loaded(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_RERANKER_ENABLED", "true")
+    monkeypatch.setenv("RAG_RERANKER_BACKEND", "hf_cross_encoder")
+    monkeypatch.setenv("RAG_RERANKER_MODEL_ID", "BAAI/bge-reranker-v2-m3")
+    monkeypatch.setenv("RAG_RERANKER_CANDIDATE_POOL_SIZE", "24")
+    monkeypatch.setenv("RAG_RERANKER_MAX_LENGTH", "640")
+    monkeypatch.setenv("RAG_RERANKER_BATCH_SIZE", "6")
+    settings = Settings()
+    assert settings.rag_reranker_enabled is True
+    assert settings.rag_reranker_backend == "hf_cross_encoder"
+    assert settings.rag_reranker_model_id == "BAAI/bge-reranker-v2-m3"
+    assert settings.rag_reranker_candidate_pool_size == 24
+    assert settings.rag_reranker_max_length == 640
+    assert settings.rag_reranker_batch_size == 6

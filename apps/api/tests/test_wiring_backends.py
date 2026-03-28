@@ -10,6 +10,7 @@ from kankor_api.wiring import (
     _build_deepseek_embedder,
     _build_e5_embedder,
     _build_gemini_llm,
+    _build_reranker,
     _build_whatsapp_runtime,
 )
 
@@ -79,3 +80,11 @@ def test_build_grounding_context_plugin_loads_pdf_window_adaptive_settings(monke
     assert plugin.adaptive_top_score_very_low == 0.25
     assert plugin.adaptive_score_gap_low == 0.04
     assert plugin.adaptive_complexity_length_tokens == 30
+
+
+def test_build_reranker_rejects_unknown_backend_when_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_RERANKER_ENABLED", "true")
+    monkeypatch.setenv("RAG_RERANKER_BACKEND", "unknown-reranker")
+    settings = Settings()
+    with pytest.raises(ValueError, match="Unsupported reranker backend"):
+        _build_reranker(settings)

@@ -9,6 +9,7 @@ import numpy as np
 
 from rag_core.contracts.embeddings import Embedder
 from rag_core.contracts.llm import LLMProvider
+from rag_core.contracts.reranker import NoopReranker, Reranker
 from rag_core.contracts.vector_store import VectorStore
 from rag_core.rag.adaptive_retrieval import (
     RetrievalAssessment,
@@ -108,6 +109,8 @@ class RAGPipeline:
         source_pdf_url_template: str | None = DEFAULT_SOURCE_PDF_URL_TEMPLATE,
         intent_router: IntentRouter | None = None,
         grounding_context_plugin: GroundingContextPlugin | None = None,
+        reranker: Reranker | None = None,
+        reranker_candidate_pool_size: int = 20,
         local_expansion_neighbors: int = 1,
         retrieval_confidence_top_score: float = 0.27,
         retrieval_confidence_min_hits: int = 1,
@@ -139,6 +142,12 @@ class RAGPipeline:
         self.source_pdf_url_template = source_pdf_url_template
         self.intent_router = intent_router or IntentRouter()
         self.grounding_context_plugin = grounding_context_plugin or TextGroundingContextPlugin()
+        self.reranker = reranker or NoopReranker()
+        self.reranker_enabled = not isinstance(self.reranker, NoopReranker)
+        self.reranker_candidate_pool_size = max(
+            self.top_k,
+            int(reranker_candidate_pool_size),
+        )
         self.local_expansion_neighbors = max(0, int(local_expansion_neighbors))
         self.retrieval_confidence_top_score = float(retrieval_confidence_top_score)
         self.retrieval_confidence_min_hits = max(1, int(retrieval_confidence_min_hits))
@@ -231,8 +240,10 @@ class RAGPipeline:
         filters: dict[str, str] | None = None,
         page_span: tuple[int, int] | None = None,
         overfetch_multiplier: int = 8,
+        result_top_k: int | None = None,
     ) -> list[Hit]:
         resolved_overfetch = max(1, int(overfetch_multiplier))
+        resolved_result_top_k = self.top_k if result_top_k is None else max(1, int(result_top_k))
 
         # Per-request dedupe to avoid repeated embedding calls for identical variants.
         cleaned_questions: list[str] = []
@@ -259,7 +270,7 @@ class RAGPipeline:
                 f"Got shape={getattr(query_vectors, 'shape', None)} for texts={len(cleaned_questions)}."
             )
 
-        requested_k = self.top_k * resolved_overfetch
+        requested_k = resolved_result_top_k * resolved_overfetch
         hit_groups: list[list[Hit]] = []
         for query_vector in query_vectors:
             candidates = self.vector_store.search(query_vector, top_k=requested_k, filters=filters)
@@ -275,9 +286,63 @@ class RAGPipeline:
             return []
         return merge_retrieval_hits(
             hit_groups=hit_groups,
-            top_k=self.top_k,
+            top_k=resolved_result_top_k,
             min_score=self.min_score,
         )
+
+    @staticmethod
+    def _preserve_expanded_rerank_order(
+        *,
+        ranked_hits: Sequence[Hit],
+        expanded_hits: Sequence[Hit],
+    ) -> list[Hit]:
+        expanded_by_id = {hit.document.id: hit for hit in expanded_hits}
+        ordered: list[Hit] = []
+        seen_ids: set[str] = set()
+
+        for hit in ranked_hits:
+            doc_id = hit.document.id
+            if doc_id in expanded_by_id and doc_id not in seen_ids:
+                ordered.append(hit)
+                seen_ids.add(doc_id)
+
+        for hit in expanded_hits:
+            doc_id = hit.document.id
+            if doc_id in seen_ids:
+                continue
+            ordered.append(hit)
+            seen_ids.add(doc_id)
+        return ordered
+
+    @staticmethod
+    def _should_rerank_intent(intent: RAGIntent) -> bool:
+        return intent in {RAGIntent.GROUNDED_TEXTBOOK, RAGIntent.PRACTICE_GENERATION}
+
+    def _resolved_retrieval_result_top_k(self, *, intent: RAGIntent) -> int:
+        if self.reranker_enabled and self._should_rerank_intent(intent):
+            return self.reranker_candidate_pool_size
+        return self.top_k
+
+    def _rerank_hits(
+        self,
+        *,
+        question: str,
+        hits: Sequence[Hit],
+    ) -> list[Hit]:
+        if not self.reranker_enabled or not hits:
+            return list(hits[: self.top_k])
+        try:
+            ranked_hits = self.reranker.rerank(
+                query=question,
+                hits=hits,
+                top_k=self.top_k,
+            )
+        except Exception:  # pragma: no cover - defensive fallback
+            logger.exception("reranker_failure_legacy_pipeline")
+            return list(hits[: self.top_k])
+        if not ranked_hits:
+            return list(hits[: self.top_k])
+        return list(ranked_hits[: self.top_k])
 
     def _confidence_fallback_response(self) -> str:
         return "I can give general guidance, but I could not verify this from the textbooks."
@@ -393,6 +458,7 @@ class RAGPipeline:
         hits: list[Hit] = []
         if self._should_retrieve(intent):
             queries = route.retrieval_queries or [question]
+            retrieval_result_top_k = self._resolved_retrieval_result_top_k(intent=intent)
             if (
                 self.use_v6_retrieval
                 and self.v6_query_context_builder is not None
@@ -530,6 +596,7 @@ class RAGPipeline:
                         queries,
                         filters=filters,
                         page_span=page_span,
+                        result_top_k=retrieval_result_top_k,
                     )
                     # If the chapter span is mismatched or too narrow, fall back to the full book.
                     if not hits and filters is not None:
@@ -537,10 +604,11 @@ class RAGPipeline:
                             queries,
                             filters=filters,
                             page_span=None,
+                            result_top_k=retrieval_result_top_k,
                         )
                     # Last resort: global retrieval.
                     if not hits:
-                        hits = self.retrieve_many(queries)
+                        hits = self.retrieve_many(queries, result_top_k=retrieval_result_top_k)
                     self._log_toc_trace(
                         intent=intent,
                         trace=toc_trace,
@@ -551,7 +619,7 @@ class RAGPipeline:
                         },
                     )
                 else:
-                    hits = self.retrieve_many(queries)
+                    hits = self.retrieve_many(queries, result_top_k=retrieval_result_top_k)
                     self._log_toc_trace(
                         intent=intent,
                         trace=toc_trace,
@@ -582,9 +650,12 @@ class RAGPipeline:
                             top_k=self.top_k,
                             front_matter_policy=self.topic_locator_front_matter_policy,
                         )
+            if self.reranker_enabled and self._should_rerank_intent(intent):
+                hits = self._rerank_hits(question=question, hits=hits)
             if self._should_expand_neighbors(intent):
                 pre_expansion_top_score = self._resolve_top_score(hits)
                 pre_expansion_score_gap = self._resolve_score_gap(hits)
+                ranked_hits = list(hits)
                 expanded_hits = expand_local_window_hits(
                     hits=hits,
                     vector_store=self.vector_store,
@@ -597,7 +668,10 @@ class RAGPipeline:
                     top_score_post_expansion=self._resolve_top_score(expanded_hits),
                     score_gap_post_expansion=self._resolve_score_gap(expanded_hits),
                 )
-                hits = expanded_hits
+                hits = self._preserve_expanded_rerank_order(
+                    ranked_hits=ranked_hits,
+                    expanded_hits=expanded_hits,
+                )
             retrieval_assessment = assess_retrieval_confidence(
                 hits=hits,
                 min_top_score=self.retrieval_confidence_top_score,

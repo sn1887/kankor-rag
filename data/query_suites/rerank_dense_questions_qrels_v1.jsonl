@@ -1,0 +1,7 @@
+{"query_id":"dense_newton_fa_01","relevant_doc_keys":{"G11-Dr-Physic":1.0},"relevant_ranges":[[109,117,1.0]]}
+{"query_id":"dense_newton_ps_01","relevant_doc_keys":{"G11-Dr-Physic":1.0},"relevant_ranges":[[109,117,1.0]]}
+{"query_id":"dense_newton_multiline_fa_01","relevant_doc_keys":{"G11-Dr-Physic":1.0},"relevant_ranges":[[109,117,1.0]]}
+{"query_id":"dense_atom_fa_01","relevant_doc_keys":{"G10-Dr-Chemistry":1.0},"relevant_ranges":[[9,13,1.0]]}
+{"query_id":"dense_cell_fa_01","relevant_doc_keys":{"G11-Dr-Biology":1.0},"relevant_ranges":[[23,27,1.0]]}
+{"query_id":"dense_cell_ps_01","relevant_doc_keys":{"G11-Dr-Biology":1.0},"relevant_ranges":[[23,27,1.0]]}
+{"query_id":"dense_ahmad_shah_fa_01","relevant_doc_keys":{"G12-Dr-History":1.0},"relevant_ranges":[[15,23,1.0]]}
