@@ -41,6 +41,7 @@ def test_build_system_prompt_includes_exam_and_citation_contract() -> None:
     assert "سوال تمرینی" in prompt
     assert "ارجاع درون‌متنی" in prompt
     assert "زبان پاسخ: دری." in prompt
+    assert "هرگز پاسخ را به انگلیسی ننویسید" in prompt
 
 
 def test_build_context_block_exposes_reference_metadata() -> None:
@@ -74,6 +75,46 @@ def test_build_system_prompt_adds_stepwise_stem_solver_directive() -> None:
     assert "داده‌ها، فرمول، جایگذاری، نتیجه، بررسی نهایی" in message
     assert "گام‌به‌گام اما فشرده" in message
     assert "retrieved_sources: 1" in message
+
+
+def test_build_system_prompt_supportive_grounding_for_stem_queries() -> None:
+    prompt = build_system_prompt(
+        question="Explain Newton's second law with an example.",
+        hits=[_sample_hit()],
+        corpus_version="kankor-corpus@2026.03",
+        default_language="match-user",
+        intent="grounded_textbook",
+        supportive_grounding=True,
+    )
+    assert "اگر متن بازیابی‌شده دقیقاً همان سوال را پوشش نمی‌داد" in prompt
+    assert "زبان پاسخ: دری." in prompt
+
+
+def test_build_chat_messages_supportive_grounding_uses_sources_as_support() -> None:
+    messages = build_chat_messages(
+        question="Solve this physics equation.",
+        history=[],
+        context_block="Sample context",
+        grounded=True,
+        intent="grounded_textbook",
+        task_directive="solver",
+        corpus_version="kankor-corpus@2026.03",
+        hit_count=1,
+        supportive_grounding=True,
+    )
+    message = messages[-1].content
+    assert "grounding_mode: supportive_stem" in message
+    assert "اگر متن بازیابی‌شده دقیقاً همان سوال را پوشش نمی‌داد، مسئله را مستقیم حل کن" in message
+
+
+def test_build_task_directive_adds_mcq_language_rule() -> None:
+    directive = build_task_directive(
+        question="Choose the correct answer: A) Force B) Mass C) Speed D) Time",
+        hits=[_sample_hit()],
+        intent="grounded_textbook",
+    )
+    assert "گزینه درست را روشن مشخص کن" in directive
+    assert "فقط حروف گزینه‌ها" in directive
 
 
 def test_build_system_prompt_adds_topic_locator_directive() -> None:
@@ -129,6 +170,17 @@ def test_build_system_prompt_is_stable_for_grounded_requests() -> None:
         intent="grounded_textbook",
     )
     assert prompt_a == prompt_b
+
+
+def test_build_system_prompt_routes_english_science_query_to_dari() -> None:
+    prompt = build_system_prompt(
+        question="Explain Newton's second law.",
+        hits=[_sample_hit()],
+        corpus_version="kankor-corpus@2026.03",
+        default_language="match-user",
+        intent="grounded_textbook",
+    )
+    assert "زبان پاسخ: دری." in prompt
 
 
 def test_build_system_prompt_for_direct_solver_skips_citation_contract() -> None:

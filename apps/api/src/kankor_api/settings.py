@@ -20,10 +20,15 @@ class Settings(BaseSettings):
     rag_gemini_fallback_model_id: str | None = Field(default=None, alias='RAG_GEMINI_FALLBACK_MODEL_ID')
     rag_deepseek_model_id: str = Field(default='deepseek-chat', alias='RAG_DEEPSEEK_MODEL_ID')
     rag_embedding_model_id: str = Field(default='intfloat/multilingual-e5-small', alias='RAG_EMBEDDING_MODEL_ID')
+    rag_bge_m3_model_id: str = Field(default='BAAI/bge-m3', alias='RAG_BGE_M3_MODEL_ID')
     rag_openai_embedding_model_id: str = Field(default='text-embedding-3-small', alias='RAG_OPENAI_EMBEDDING_MODEL_ID')
     rag_gemini_embedding_model_id: str = Field(default='text-embedding-004', alias='RAG_GEMINI_EMBEDDING_MODEL_ID')
     rag_deepseek_embedding_model_id: str = Field(default='deepseek-embedding', alias='RAG_DEEPSEEK_EMBEDDING_MODEL_ID')
     rag_embedding_backend: str = Field(default='e5', alias='RAG_EMBEDDING_BACKEND')
+    rag_bge_m3_batch_size: int = Field(default=32, alias='RAG_BGE_M3_BATCH_SIZE')
+    rag_bge_m3_use_fp16: bool | None = Field(default=None, alias='RAG_BGE_M3_USE_FP16')
+    rag_bge_m3_device: str | None = Field(default=None, alias='RAG_BGE_M3_DEVICE')
+    rag_bge_m3_max_length: int = Field(default=8192, alias='RAG_BGE_M3_MAX_LENGTH')
     rag_allow_hash_embedder_fallback: bool = Field(default=False, alias='RAG_ALLOW_HASH_EMBEDDER_FALLBACK')
     rag_openai_api_key: str | None = Field(default=None, alias='RAG_OPENAI_API_KEY')
     rag_openai_base_url: str | None = Field(default=None, alias='RAG_OPENAI_BASE_URL')
@@ -44,6 +49,8 @@ class Settings(BaseSettings):
     rag_chat_api_key: str | None = Field(default=None, alias='RAG_CHAT_API_KEY')
     rag_index_path: str = Field(default='data/sample_index/index.faiss', alias='RAG_INDEX_PATH')
     rag_docstore_path: str = Field(default='data/sample_index/metadata.jsonl', alias='RAG_DOCSTORE_PATH')
+    rag_chapter_index_path: str | None = Field(default=None, alias='RAG_CHAPTER_INDEX_PATH')
+    rag_topic_index_path: str | None = Field(default=None, alias='RAG_TOPIC_INDEX_PATH')
     rag_toc_manifest_path: str | None = Field(default=None, alias='RAG_TOC_MANIFEST_PATH')
     rag_vector_store_backend: str = Field(default='faiss', alias='RAG_VECTOR_STORE_BACKEND')
     rag_context_mode: str = Field(default='text', alias='RAG_CONTEXT_MODE')
@@ -77,11 +84,19 @@ class Settings(BaseSettings):
     )
     rag_top_k: int = Field(default=5, alias='RAG_TOP_K')
     rag_reranker_enabled: bool = Field(default=False, alias='RAG_RERANKER_ENABLED')
-    rag_reranker_backend: str = Field(default='hf_cross_encoder', alias='RAG_RERANKER_BACKEND')
-    rag_reranker_model_id: str = Field(default='BAAI/bge-reranker-v2-m3', alias='RAG_RERANKER_MODEL_ID')
-    rag_reranker_candidate_pool_size: int = Field(default=20, alias='RAG_RERANKER_CANDIDATE_POOL_SIZE')
-    rag_reranker_max_length: int = Field(default=512, alias='RAG_RERANKER_MAX_LENGTH')
+    rag_reranker_backend: str = Field(default='onnx_cross_encoder', alias='RAG_RERANKER_BACKEND')
+    rag_reranker_model_id: str = Field(
+        default='onnx-community/gte-multilingual-reranker-base',
+        alias='RAG_RERANKER_MODEL_ID',
+    )
+    rag_reranker_model_revision: str = Field(
+        default='5807a06097ed1e68331fec2201751ccaf356d96b',
+        alias='RAG_RERANKER_MODEL_REVISION',
+    )
+    rag_reranker_candidate_pool_size: int = Field(default=8, alias='RAG_RERANKER_CANDIDATE_POOL_SIZE')
+    rag_reranker_max_length: int = Field(default=256, alias='RAG_RERANKER_MAX_LENGTH')
     rag_reranker_batch_size: int = Field(default=8, alias='RAG_RERANKER_BATCH_SIZE')
+    rag_reranker_timeout_ms: int = Field(default=1500, alias='RAG_RERANKER_TIMEOUT_MS')
     rag_references_max_sources: int = Field(default=3, alias='RAG_REFERENCES_MAX_SOURCES')
     rag_toc_routing_mode: str = Field(default='legacy', alias='RAG_TOC_ROUTING_MODE')
     rag_toc_trace_sample_rate: float = Field(default=0.0, alias='RAG_TOC_TRACE_SAMPLE_RATE')
@@ -169,6 +184,7 @@ class Settings(BaseSettings):
     rag_whatsapp_worker_poll_seconds: float = Field(default=1.0, alias='RAG_WHATSAPP_WORKER_POLL_SECONDS')
 
     @field_validator(
+        'rag_bge_m3_use_fp16',
         'rag_openai_embedding_dimensions',
         'rag_gemini_embedding_dimensions',
         'rag_deepseek_embedding_dimensions',
@@ -176,7 +192,7 @@ class Settings(BaseSettings):
         mode='before',
     )
     @classmethod
-    def _empty_embedding_dimensions_to_none(cls, value):
+    def _empty_optional_values_to_none(cls, value):
         if value == '':
             return None
         return value
@@ -230,6 +246,8 @@ class Settings(BaseSettings):
         backend = self.rag_embedding_backend.lower().strip()
         if backend == 'openai':
             return self.rag_openai_embedding_model_id
+        if backend == 'bge_m3':
+            return self.rag_bge_m3_model_id
         if backend == 'gemini':
             return self.rag_gemini_embedding_model_id
         if backend == 'deepseek':

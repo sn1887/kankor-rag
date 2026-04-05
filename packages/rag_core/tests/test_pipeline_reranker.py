@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+import time
 
 import numpy as np
 
@@ -9,6 +10,7 @@ from rag_core.contracts.llm import LLMProvider
 from rag_core.contracts.reranker import NoopReranker, Reranker
 from rag_core.contracts.vector_store import VectorStore
 from rag_core.impl.reranker_hf import HFSequenceClassificationReranker
+from rag_core.impl.reranker_onnx import ONNXSequenceClassificationReranker
 from rag_core.rag.intent_router import IntentRoute, RAGIntent
 from rag_core.rag.pipeline import RAGPipeline
 from rag_core.types import ChatAttachment, ChatTurn, Document, Hit
@@ -114,6 +116,150 @@ class StubHFSequenceClassificationReranker(HFSequenceClassificationReranker):
         return list(self._scores)
 
 
+class StubONNXSequenceClassificationReranker(ONNXSequenceClassificationReranker):
+    def __init__(self, scores: Sequence[float]) -> None:
+        super().__init__(
+            model_name="stub-onnx-model",
+            model_revision="stub-revision",
+        )
+        self._scores = list(scores)
+        self.warmup_calls = 0
+
+    def _score_pairs(self, pairs: Sequence[Sequence[str]]) -> list[float]:
+        if len(pairs) == 1 and pairs[0] == ("warmup", "warmup"):
+            self.warmup_calls += 1
+            return [0.5]
+        assert len(pairs) == len(self._scores)
+        return list(self._scores)
+
+
+class InputSynthesizingONNXReranker(ONNXSequenceClassificationReranker):
+    def __init__(self) -> None:
+        super().__init__(
+            model_name="stub-onnx-model",
+            model_revision="stub-revision",
+        )
+        self.last_ort_inputs: dict[str, np.ndarray] | None = None
+
+    def _load_runtime(self):
+        class _Tokenizer:
+            def __call__(self, batch, *, padding, truncation, return_tensors, max_length):
+                _ = batch, padding, truncation, return_tensors, max_length
+                return {
+                    "input_ids": np.asarray([[11, 12, 0], [21, 22, 23]], dtype=np.int64),
+                    "attention_mask": np.asarray([[1, 1, 0], [1, 1, 1]], dtype=np.int64),
+                }
+
+        class _Session:
+            def __init__(self, owner) -> None:
+                self.owner = owner
+
+            def run(self, output_names, ort_inputs):
+                _ = output_names
+                self.owner.last_ort_inputs = {key: np.asarray(value) for key, value in ort_inputs.items()}
+                return [np.asarray([[0.2], [0.8]], dtype=np.float32)]
+
+        self._tokenizer = _Tokenizer()
+        self._session = _Session(self)
+        self._session_input_names = ("input_ids", "attention_mask", "token_type_ids")
+        self._session_output_name = "logits"
+        self._onnxruntime = object()
+        return self._onnxruntime, self._tokenizer, self._session
+
+
+def test_onnx_reranker_load_tokenizer_falls_back_to_slow_mode() -> None:
+    reranker = ONNXSequenceClassificationReranker(
+        model_name="onnx-community/gte-multilingual-reranker-base",
+        model_revision="revision-123",
+    )
+    calls: list[tuple[str, bool]] = []
+
+    class _FakeAutoTokenizer:
+        @staticmethod
+        def from_pretrained(
+            source: str,
+            *,
+            use_fast: bool,
+            local_files_only: bool = False,
+            trust_remote_code: bool,
+            revision: str | None = None,
+        ):
+            _ = trust_remote_code
+            calls.append((source, use_fast, local_files_only, revision))
+            if use_fast:
+                raise ValueError("fast tokenizer unavailable")
+            return {"source": source, "use_fast": use_fast}
+
+    tokenizer = reranker._load_tokenizer(
+        AutoTokenizer=_FakeAutoTokenizer,
+        model_path="/tmp/models/snapshots/revision-123/onnx/model.onnx",
+    )
+
+    assert tokenizer == {"source": "/tmp/models/snapshots/revision-123", "use_fast": False}
+    assert calls == [
+        ("/tmp/models/snapshots/revision-123", True, True, None),
+        ("/tmp/models/snapshots/revision-123", False, True, None),
+    ]
+
+
+def test_onnx_reranker_load_tokenizer_falls_back_to_model_name_source() -> None:
+    reranker = ONNXSequenceClassificationReranker(
+        model_name="onnx-community/gte-multilingual-reranker-base",
+        model_revision="revision-123",
+    )
+    calls: list[tuple[str, bool]] = []
+
+    class _FakeAutoTokenizer:
+        @staticmethod
+        def from_pretrained(
+            source: str,
+            *,
+            use_fast: bool,
+            local_files_only: bool = False,
+            trust_remote_code: bool,
+            revision: str | None = None,
+        ):
+            _ = trust_remote_code
+            calls.append((source, use_fast, local_files_only, revision))
+            if source == "/tmp/models/snapshots/revision-123":
+                raise ValueError("source missing tokenizer files")
+            if use_fast:
+                raise ValueError("fast tokenizer unavailable")
+            return {"source": source, "use_fast": use_fast}
+
+    tokenizer = reranker._load_tokenizer(
+        AutoTokenizer=_FakeAutoTokenizer,
+        model_path="/tmp/models/snapshots/revision-123/onnx/model.onnx",
+    )
+
+    assert tokenizer == {"source": "onnx-community/gte-multilingual-reranker-base", "use_fast": False}
+    assert calls == [
+        ("/tmp/models/snapshots/revision-123", True, True, None),
+        ("/tmp/models/snapshots/revision-123", False, True, None),
+        ("onnx-community/gte-multilingual-reranker-base", True, False, "revision-123"),
+        ("onnx-community/gte-multilingual-reranker-base", False, False, "revision-123"),
+    ]
+
+
+class SlowReranker(Reranker):
+    def __init__(self, *, delay_seconds: float) -> None:
+        self.delay_seconds = float(delay_seconds)
+
+    def warmup(self) -> None:
+        return None
+
+    def rerank(
+        self,
+        *,
+        query: str,
+        hits: Sequence[Hit],
+        top_k: int | None = None,
+    ) -> list[Hit]:
+        _ = query, top_k
+        time.sleep(self.delay_seconds)
+        return list(hits)
+
+
 def _hit(
     *,
     doc_id: str,
@@ -192,6 +338,37 @@ def test_noop_reranker_returns_original_order() -> None:
     ranked = reranker.rerank(query="query", hits=hits, top_k=2)
 
     assert [hit.document.id for hit in ranked] == ["doc-a", "doc-b"]
+
+
+def test_onnx_sequence_classification_reranker_reorders_hits_and_supports_warmup() -> None:
+    reranker = StubONNXSequenceClassificationReranker(scores=[0.2, 0.8])
+    hits = [
+        _hit(doc_id="doc-a", page=7, text="first", score=0.95),
+        _hit(doc_id="doc-b", page=8, text="second", score=0.61),
+    ]
+
+    reranker.warmup()
+    ranked = reranker.rerank(query="query", hits=hits, top_k=2)
+
+    assert reranker.warmup_calls == 1
+    assert [hit.document.id for hit in ranked] == ["doc-b", "doc-a"]
+    assert ranked[0].score == 0.61
+    assert ranked[0].document.metadata["rerank_score"] == 0.8
+
+
+def test_onnx_sequence_classification_reranker_synthesizes_missing_token_type_ids() -> None:
+    reranker = InputSynthesizingONNXReranker()
+    hits = [
+        _hit(doc_id="doc-a", page=7, text="first", score=0.95),
+        _hit(doc_id="doc-b", page=8, text="second", score=0.61),
+    ]
+
+    reranker.rerank(query="query", hits=hits, top_k=2)
+
+    assert reranker.last_ort_inputs is not None
+    assert set(reranker.last_ort_inputs) == {"input_ids", "attention_mask", "token_type_ids"}
+    assert reranker.last_ort_inputs["token_type_ids"].shape == reranker.last_ort_inputs["input_ids"].shape
+    assert np.count_nonzero(reranker.last_ort_inputs["token_type_ids"]) == 0
 
 
 def test_disabled_reranker_preserves_legacy_candidate_width() -> None:
@@ -320,3 +497,88 @@ def test_pashto_query_keeps_cross_language_hits_and_pashto_answer_prompt() -> No
     assert sources[0]["language"] == "fa"
     assert llm.last_system_prompt is not None
     assert "زبان پاسخ: پښتو." in llm.last_system_prompt
+
+
+def test_stream_answer_populates_diagnostics_for_retrieval_and_generation() -> None:
+    store = SearchRecordingStore(
+        [
+            _hit(doc_id="doc-a", page=7, text="first", score=0.95, chunk_index=0),
+            _hit(doc_id="doc-b", page=8, text="second", score=0.61, chunk_index=1),
+        ]
+    )
+    pipeline, _ = _make_pipeline(
+        store=store,
+        reranker=PriorityReranker({"doc-b": 0.99, "doc-a": 0.7}),
+    )
+    diagnostics: dict[str, object] = {}
+
+    list(
+        pipeline.stream_answer(
+            question="Explain photosynthesis",
+            history=[],
+            diagnostics=diagnostics,
+        )
+    )
+
+    assert diagnostics["intent"] == "grounded_textbook"
+    assert diagnostics["retrieval_total_ms"] >= 0
+    assert diagnostics["pipeline_total_ms"] >= 0
+    assert diagnostics["retrieved_hit_count"] >= 1
+    assert diagnostics["no_token_emitted"] is False
+
+
+def test_stream_answer_diagnostic_override_can_disable_reranker() -> None:
+    store = SearchRecordingStore(
+        [
+            _hit(doc_id="doc-a", page=7, text="first", score=0.95, chunk_index=0),
+            _hit(doc_id="doc-b", page=8, text="second", score=0.61, chunk_index=1),
+        ]
+    )
+    pipeline, _ = _make_pipeline(
+        store=store,
+        reranker=PriorityReranker({"doc-b": 0.99, "doc-a": 0.7}),
+    )
+    diagnostics: dict[str, object] = {}
+
+    events = list(
+        pipeline.stream_answer(
+            question="Explain photosynthesis",
+            history=[],
+            diagnostics=diagnostics,
+            diagnostic_overrides={"reranker_enabled": False},
+        )
+    )
+    sources = next(event["data"] for event in events if event["type"] == "sources")
+
+    assert [source["page"] for source in sources[:2]] == [7, 8]
+    assert diagnostics["reranker_enabled_effective"] is False
+    assert diagnostics["applied_overrides"] == {"reranker_enabled": False}
+
+
+def test_stream_answer_reranker_timeout_falls_back_to_dense_order_and_sets_diagnostics() -> None:
+    store = SearchRecordingStore(
+        [
+            _hit(doc_id="doc-a", page=7, text="first", score=0.95, chunk_index=0),
+            _hit(doc_id="doc-b", page=8, text="second", score=0.61, chunk_index=1),
+        ]
+    )
+    pipeline, _ = _make_pipeline(
+        store=store,
+        reranker=SlowReranker(delay_seconds=0.15),
+    )
+    pipeline.reranker_timeout_ms = 25
+    diagnostics: dict[str, object] = {}
+
+    events = list(
+        pipeline.stream_answer(
+            question="Explain photosynthesis",
+            history=[],
+            diagnostics=diagnostics,
+        )
+    )
+    sources = next(event["data"] for event in events if event["type"] == "sources")
+
+    assert [source["page"] for source in sources[:2]] == [7, 8]
+    assert diagnostics["reranker_timeout"] is True
+    assert diagnostics["reranker_degraded"] is True
+    assert diagnostics["reranker_failed"] is False

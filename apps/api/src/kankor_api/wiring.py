@@ -3,14 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 import importlib
+import logging
 from pathlib import Path
 from typing import Callable, TypeVar, cast
 
 from rag_core.contracts.embeddings import Embedder
 from rag_core.contracts.llm import LLMProvider
 from rag_core.contracts.reranker import NoopReranker, Reranker
+from rag_core.contracts.structure_lookup import StructureLookup
 from rag_core.contracts.vector_store import VectorStore
 from rag_core.impl.embeddings_deepseek import DeepSeekEmbedder
+from rag_core.impl.embeddings_bge_m3 import BGEM3Embedder
 from rag_core.impl.embeddings_e5 import HashingEmbedder, MultilingualE5Embedder
 from rag_core.impl.embeddings_gemini import GeminiEmbedder
 from rag_core.impl.embeddings_openai import OpenAIEmbedder
@@ -20,17 +23,12 @@ from rag_core.impl.llm_gemini_native import GeminiNativeLLMProvider
 from rag_core.impl.llm_openai import OpenAILLMProvider
 from rag_core.impl.llm_transformers import TransformersLLMProvider
 from rag_core.impl.reranker_hf import HFSequenceClassificationReranker
+from rag_core.impl.reranker_onnx import ONNXSequenceClassificationReranker
+from rag_core.impl.structure_lookup_jsonl import JsonlStructureLookup
 from rag_core.impl.vector_faiss import FaissVectorStore
-from rag_core.rag.adaptive_retrieval import TopicLocatorFrontMatterPolicy
-from rag_core.rag.context_plugins import (
-    GroundingContextPlugin,
-    PdfWindowGroundingContextPlugin,
-    TextGroundingContextPlugin,
-)
-from rag_core.rag.intent_router import DirectSolverPolicy, IntentRouter
+from rag_core.rag.context_plugins import GroundingContextPlugin, TextGroundingContextPlugin
+from rag_core.rag.intent_router import IntentRouter
 from rag_core.rag.pipeline import RAGPipeline
-from rag_core.rag.retrieval_reliability import build_default_retrieval_stack
-from rag_core.rag.toc_locator import TOCIndex
 
 from .compatibility import (
     load_index_manifest,
@@ -59,6 +57,8 @@ from .whatsapp.queue import InMemoryJobQueue
 from .whatsapp.runtime import WhatsAppRuntime, WhatsAppWorker
 from .whatsapp.service import WhatsAppWebhookService
 from .whatsapp.stores import InMemoryConversationStore, InMemoryProcessedMessageStore
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -105,6 +105,16 @@ def _build_openai_embedder(settings: Settings) -> Embedder:
         base_url=settings.rag_openai_base_url,
         dimensions=settings.rag_openai_embedding_dimensions,
         timeout_seconds=settings.rag_openai_timeout_seconds,
+    )
+
+
+def _build_bge_m3_embedder(settings: Settings) -> Embedder:
+    return BGEM3Embedder(
+        model_name=settings.rag_bge_m3_model_id,
+        batch_size=settings.rag_bge_m3_batch_size,
+        use_fp16=settings.rag_bge_m3_use_fp16,
+        device=settings.rag_bge_m3_device,
+        max_length=settings.rag_bge_m3_max_length,
     )
 
 
@@ -222,9 +232,19 @@ def _build_noop_reranker(_: Settings) -> Reranker:
 def _build_hf_cross_encoder_reranker(settings: Settings) -> Reranker:
     return HFSequenceClassificationReranker(
         model_name=settings.rag_reranker_model_id,
+        model_revision=settings.rag_reranker_model_revision,
         max_length=settings.rag_reranker_max_length,
         batch_size=settings.rag_reranker_batch_size,
         trust_remote_code=True,
+    )
+
+
+def _build_onnx_cross_encoder_reranker(settings: Settings) -> Reranker:
+    return ONNXSequenceClassificationReranker(
+        model_name=settings.rag_reranker_model_id,
+        model_revision=settings.rag_reranker_model_revision,
+        max_length=settings.rag_reranker_max_length,
+        batch_size=settings.rag_reranker_batch_size,
     )
 
 
@@ -318,6 +338,7 @@ def _build_whatsapp_ocr_tesseract(_: Settings) -> OCRProvider:
 EMBEDDER_FACTORIES: dict[str, Callable[[Settings], Embedder]] = {
     "hash": _build_hash_embedder,
     "e5": _build_e5_embedder,
+    "bge_m3": _build_bge_m3_embedder,
     "openai": _build_openai_embedder,
     "gemini": _build_gemini_embedder,
     "deepseek": _build_deepseek_embedder,
@@ -338,6 +359,7 @@ VECTOR_STORE_FACTORIES: dict[str, Callable[[Settings], VectorStore]] = {
 RERANKER_FACTORIES: dict[str, Callable[[Settings], Reranker]] = {
     "noop": _build_noop_reranker,
     "hf_cross_encoder": _build_hf_cross_encoder_reranker,
+    "onnx_cross_encoder": _build_onnx_cross_encoder_reranker,
 }
 
 WHATSAPP_QUEUE_FACTORIES: dict[str, Callable[[Settings], JobQueue]] = {
@@ -422,21 +444,8 @@ def _build_llm(settings: Settings) -> LLMProvider:
 
 
 def _build_grounding_context_plugin(settings: Settings) -> GroundingContextPlugin:
-    mode = settings.rag_context_mode.strip().lower()
-    if mode == "text":
-        return TextGroundingContextPlugin()
-    if mode == "pdf_windows":
-        return PdfWindowGroundingContextPlugin(
-            max_attachments=settings.rag_pdf_window_max_attachments,
-            max_pages_per_attachment=settings.rag_pdf_window_max_pages_per_attachment,
-            adaptive_enabled=settings.rag_pdf_window_adaptive_enabled,
-            adaptive_min_attachments=settings.rag_pdf_window_adaptive_min_attachments,
-            adaptive_top_score_low=settings.rag_pdf_window_adaptive_top_score_low,
-            adaptive_top_score_very_low=settings.rag_pdf_window_adaptive_top_score_very_low,
-            adaptive_score_gap_low=settings.rag_pdf_window_adaptive_score_gap_low,
-            adaptive_complexity_length_tokens=settings.rag_pdf_window_adaptive_complexity_length_tokens,
-        )
-    raise ValueError('Unsupported RAG context mode. Use "text" or "pdf_windows".')
+    _ = settings
+    return TextGroundingContextPlugin()
 
 
 def _build_vector_store(settings: Settings) -> VectorStore:
@@ -459,15 +468,30 @@ def _build_reranker(settings: Settings) -> Reranker:
     return factory(settings)
 
 
-def _build_toc_index(settings: Settings) -> TOCIndex | None:
-    configured = (settings.rag_toc_manifest_path or "").strip()
-    if configured:
-        toc_path = Path(configured)
-    else:
-        toc_path = Path(settings.rag_docstore_path).resolve().parent / "toc_manifest.jsonl"
-    if not toc_path.exists():
+def _resolve_structure_index_path(configured: str | None, *, fallback_name: str, settings: Settings) -> Path:
+    normalized = (configured or "").strip()
+    if normalized:
+        return Path(normalized)
+    return Path(settings.rag_docstore_path).resolve().parent / fallback_name
+
+
+def _build_structure_lookup(settings: Settings) -> StructureLookup | None:
+    chapter_index_path = _resolve_structure_index_path(
+        settings.rag_chapter_index_path,
+        fallback_name="chapter_index.jsonl",
+        settings=settings,
+    )
+    topic_index_path = _resolve_structure_index_path(
+        settings.rag_topic_index_path,
+        fallback_name="topic_index.jsonl",
+        settings=settings,
+    )
+    if not chapter_index_path.exists() and not topic_index_path.exists():
         return None
-    return TOCIndex.load(toc_path, routing_mode=settings.rag_toc_routing_mode)
+    return JsonlStructureLookup.load(
+        chapter_index_path=chapter_index_path,
+        topic_index_path=topic_index_path,
+    )
 
 
 def _build_whatsapp_runtime(settings: Settings, *, pipeline: RAGPipeline) -> WhatsAppRuntime | None:
@@ -554,6 +578,15 @@ def get_app_state() -> AppState:
     settings = load_settings()
     vector_store = _build_vector_store(settings)
     reranker = _build_reranker(settings)
+    if settings.rag_reranker_enabled:
+        try:
+            reranker.warmup()
+        except Exception:
+            logger.exception(
+                "reranker_warmup_failed backend=%s model=%s; continuing without blocking startup",
+                settings.rag_reranker_backend,
+                settings.rag_reranker_model_id,
+            )
     manifest = load_index_manifest(settings.rag_index_path)
     expected_embedding_dimension = resolve_expected_embedding_dimension(
         settings=settings,
@@ -562,24 +595,13 @@ def get_app_state() -> AppState:
     )
     embedder = _build_embedder(settings, expected_dimension=expected_embedding_dimension)
     llm = _build_llm(settings)
-    toc_index = _build_toc_index(settings)
+    structure_lookup = _build_structure_lookup(settings)
     validate_index_runtime_compatibility(
         settings=settings,
         vector_store=vector_store,
         embedder=embedder,
         manifest=manifest,
     )
-    v6_query_context_builder = None
-    v6_retrieval_pipeline = None
-    if settings.rag_use_v6_retrieval:
-        v6_query_context_builder, v6_retrieval_pipeline = build_default_retrieval_stack(
-            embedder=embedder,
-            vector_store=vector_store,
-            toc_index=toc_index,
-            top_k=settings.rag_top_k,
-            trace_enabled=True,
-            page_localization_min_confidence=settings.rag_v6_page_localization_min_confidence,
-        )
     pipeline = RAGPipeline(
         llm=llm,
         embedder=embedder,
@@ -589,25 +611,11 @@ def get_app_state() -> AppState:
         min_score=settings.rag_min_score,
         intent_router=IntentRouter(
             max_decomposition_queries=settings.rag_intent_router_max_decomposition_queries,
-            direct_solver_policy=DirectSolverPolicy(
-                enabled=settings.rag_direct_solver_enabled,
-                min_signal_score=settings.rag_direct_solver_min_signal_score,
-                min_numeric_tokens=settings.rag_direct_solver_min_numeric_tokens,
-                max_question_length=settings.rag_direct_solver_max_question_length,
-            ),
         ),
         local_expansion_neighbors=settings.rag_local_expansion_neighbors,
         retrieval_confidence_top_score=settings.rag_retrieval_confidence_top_score,
         retrieval_confidence_min_hits=settings.rag_retrieval_confidence_min_hits,
         retrieval_oos_top_score_threshold=settings.rag_retrieval_oos_top_score_threshold,
-        toc_index=toc_index,
-        topic_locator_front_matter_policy=TopicLocatorFrontMatterPolicy(
-            enabled=settings.rag_topic_locator_front_matter_suppression_enabled,
-            max_front_matter_page=settings.rag_topic_locator_front_matter_max_page,
-            allow_front_matter_when_empty=settings.rag_topic_locator_front_matter_allow_when_empty,
-            suppress_when_page_unknown=settings.rag_topic_locator_front_matter_suppress_page_unknown,
-        ),
-        topic_locator_response_mode=settings.rag_topic_locator_response_mode,
         max_new_tokens=settings.rag_max_new_tokens,
         max_new_tokens_limit=settings.rag_max_new_tokens_hard_limit,
         temperature=settings.rag_temperature,
@@ -616,13 +624,11 @@ def get_app_state() -> AppState:
         default_language=settings.rag_default_language,
         source_pdf_url_template=settings.rag_source_pdf_url_template,
         references_max_sources=settings.rag_references_max_sources,
-        toc_trace_sample_rate=settings.rag_toc_trace_sample_rate,
         grounding_context_plugin=_build_grounding_context_plugin(settings),
+        structure_lookup=structure_lookup,
         reranker=reranker,
         reranker_candidate_pool_size=settings.rag_reranker_candidate_pool_size,
-        use_v6_retrieval=settings.rag_use_v6_retrieval,
-        v6_query_context_builder=v6_query_context_builder,
-        v6_retrieval_pipeline=v6_retrieval_pipeline,
+        reranker_timeout_ms=settings.rag_reranker_timeout_ms,
     )
     whatsapp_runtime = _build_whatsapp_runtime(settings, pipeline=pipeline)
     return AppState(settings=settings, pipeline=pipeline, whatsapp=whatsapp_runtime)

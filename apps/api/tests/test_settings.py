@@ -78,6 +78,19 @@ def test_embedding_dimensions_accept_empty_env_as_none(monkeypatch) -> None:
     assert settings.rag_openai_embedding_dimensions is None
 
 
+def test_bge_m3_use_fp16_accepts_empty_env_as_none(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_BGE_M3_USE_FP16", "")
+    settings = Settings()
+    assert settings.rag_bge_m3_use_fp16 is None
+
+
+def test_configured_embedding_model_id_for_bge_m3(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_EMBEDDING_BACKEND", "bge_m3")
+    monkeypatch.setenv("RAG_BGE_M3_MODEL_ID", "BAAI/bge-m3")
+    settings = Settings()
+    assert settings.configured_embedding_model_id == "BAAI/bge-m3"
+
+
 def test_resolved_whatsapp_tokens_strip_whitespace(monkeypatch) -> None:
     monkeypatch.setenv("RAG_WHATSAPP_VERIFY_TOKEN", "  verify-token ")
     monkeypatch.setenv("RAG_WHATSAPP_ACCESS_TOKEN", "  access-token ")
@@ -143,15 +156,19 @@ def test_toc_routing_mode_settings_are_loaded(monkeypatch) -> None:
 
 def test_reranker_settings_are_loaded(monkeypatch) -> None:
     monkeypatch.setenv("RAG_RERANKER_ENABLED", "true")
-    monkeypatch.setenv("RAG_RERANKER_BACKEND", "hf_cross_encoder")
-    monkeypatch.setenv("RAG_RERANKER_MODEL_ID", "BAAI/bge-reranker-v2-m3")
+    monkeypatch.setenv("RAG_RERANKER_BACKEND", "onnx_cross_encoder")
+    monkeypatch.setenv("RAG_RERANKER_MODEL_ID", "onnx-community/gte-multilingual-reranker-base")
+    monkeypatch.setenv("RAG_RERANKER_MODEL_REVISION", "revision-123")
     monkeypatch.setenv("RAG_RERANKER_CANDIDATE_POOL_SIZE", "24")
     monkeypatch.setenv("RAG_RERANKER_MAX_LENGTH", "640")
     monkeypatch.setenv("RAG_RERANKER_BATCH_SIZE", "6")
+    monkeypatch.setenv("RAG_RERANKER_TIMEOUT_MS", "1700")
     settings = Settings()
     assert settings.rag_reranker_enabled is True
-    assert settings.rag_reranker_backend == "hf_cross_encoder"
-    assert settings.rag_reranker_model_id == "BAAI/bge-reranker-v2-m3"
+    assert settings.rag_reranker_backend == "onnx_cross_encoder"
+    assert settings.rag_reranker_model_id == "onnx-community/gte-multilingual-reranker-base"
+    assert settings.rag_reranker_model_revision == "revision-123"
     assert settings.rag_reranker_candidate_pool_size == 24
     assert settings.rag_reranker_max_length == 640
     assert settings.rag_reranker_batch_size == 6
+    assert settings.rag_reranker_timeout_ms == 1700

@@ -8,14 +8,14 @@ import pytest
 
 from rag_core.contracts.embeddings import Embedder
 from rag_core.contracts.llm import LLMProvider
+from rag_core.contracts.progress import ProgressEvent
+from rag_core.contracts.structure_lookup import StructureLookup
 from rag_core.contracts.vector_store import VectorStore
-from rag_core.rag.adaptive_retrieval import TopicLocatorFrontMatterPolicy
 from rag_core.rag.context_plugins import AdaptiveAttachmentRetrievalSignals
 from rag_core.rag.context_plugins import GroundingContextPlugin
 from rag_core.rag.context_plugins import PreparedChatRequest
 from rag_core.rag.context_plugins import PdfWindowGroundingContextPlugin
 from rag_core.rag.pipeline import RAGPipeline
-from rag_core.rag.toc_locator import TOCIndex
 from rag_core.types import ChatAttachment, ChatTurn, Document, Hit
 
 
@@ -24,6 +24,7 @@ class DummyLLM(LLMProvider):
         self.last_max_new_tokens: int | None = None
         self.last_temperature: float | None = None
         self.last_attachments: Sequence[ChatAttachment] | None = None
+        self.last_system_prompt: str | None = None
         self.calls = 0
 
     def stream_chat(
@@ -36,6 +37,7 @@ class DummyLLM(LLMProvider):
         attachments: Sequence[ChatAttachment] | None = None,
     ) -> Iterator[str]:
         self.calls += 1
+        self.last_system_prompt = system_prompt
         self.last_max_new_tokens = max_new_tokens
         self.last_temperature = temperature
         self.last_attachments = attachments
@@ -113,6 +115,7 @@ class DummyVectorStore(VectorStore):
 class RecordingGroundingContextPlugin(GroundingContextPlugin):
     def __init__(self) -> None:
         self.last_retrieval_signals: AdaptiveAttachmentRetrievalSignals | None = None
+        self.last_supportive_grounding: bool | None = None
 
     def build(
         self,
@@ -125,9 +128,11 @@ class RecordingGroundingContextPlugin(GroundingContextPlugin):
         task_directive: str,
         corpus_version: str,
         retrieval_signals: AdaptiveAttachmentRetrievalSignals | None = None,
+        supportive_grounding: bool = False,
     ) -> PreparedChatRequest:
         _ = grounded, intent, task_directive, corpus_version, hits
         self.last_retrieval_signals = retrieval_signals
+        self.last_supportive_grounding = supportive_grounding
         messages = list(history)
         messages.append(ChatTurn(role="user", content=question))
         return PreparedChatRequest(messages=messages)
@@ -142,14 +147,15 @@ def _write_blank_pdf(path: Path, pages: int) -> None:
         writer.write(handle)
 
 
-class DummyTOCIndex:
+class DummyStructureLookup(StructureLookup):
     def search(self, *, question: str, top_k: int = 5) -> list[Hit]:
-        if "فصل" not in question and "chapter" not in question:
+        _ = top_k
+        if "فصل" not in question and "chapter" not in question and "کدام" not in question:
             return []
         return [
             Hit(
                 document=Document(
-                    id="toc-doc",
+                    id="structure-doc",
                     text="فصل دوم: قوانین نیوتن",
                     metadata={
                         "source_id": "G10-Dr-physic",
@@ -159,8 +165,10 @@ class DummyTOCIndex:
                         "page": 18,
                         "start_page": 18,
                         "end_page": 19,
-                        "source_type": "toc_manifest",
+                        "source_type": "chapter_index",
                         "chapter_number": "2",
+                        "chapter_title": "قوانین نیوتن",
+                        "lookup_kind": "chapter",
                     },
                 ),
                 score=0.99,
@@ -168,12 +176,24 @@ class DummyTOCIndex:
         ]
 
 
+class RecordingProgressSink:
+    def __init__(self) -> None:
+        self.events: list[ProgressEvent] = []
+        self.closed = False
+
+    def emit(self, event: ProgressEvent) -> None:
+        self.events.append(event)
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def _make_pipeline(
     *,
     retrieval_confidence_top_score: float = 0.27,
     local_expansion_neighbors: int = 1,
     grounding_context_plugin=None,
-    toc_index: TOCIndex | None = None,
+    structure_lookup: StructureLookup | None = None,
 ) -> tuple[RAGPipeline, DummyLLM]:
     llm = DummyLLM()
     pipeline = RAGPipeline(
@@ -189,7 +209,7 @@ def _make_pipeline(
         temperature_min=0.0,
         temperature_max=2.0,
         grounding_context_plugin=grounding_context_plugin,
-        toc_index=toc_index,
+        structure_lookup=structure_lookup,
     )
     return pipeline, llm
 
@@ -233,6 +253,48 @@ def test_stream_answer_emits_references_event() -> None:
     refs_sources = list(refs_event["data"].get("sources") or [])
     assert refs_sources
     assert refs_event["data"].get("strategy") in {"cited_badges", "lexical_overlap", "retrieval_topk"}
+
+
+def test_stream_answer_emits_progress_sequence_for_grounded_answer() -> None:
+    pipeline, _ = _make_pipeline()
+    progress_sink = RecordingProgressSink()
+
+    events = list(
+        pipeline.stream_answer(
+            question="Explain photosynthesis",
+            history=[],
+            progress_sink=progress_sink,
+        )
+    )
+
+    assert events[0]["type"] == "sources"
+    assert [event.stage.value for event in progress_sink.events] == [
+        "thinking",
+        "retrieving",
+        "reading",
+        "writing",
+        "done",
+    ]
+    assert progress_sink.closed is True
+
+
+def test_stream_answer_emits_smalltalk_progress_without_retrieval() -> None:
+    pipeline, _ = _make_pipeline()
+    progress_sink = RecordingProgressSink()
+
+    list(
+        pipeline.stream_answer(
+            question="hello",
+            history=[],
+            progress_sink=progress_sink,
+        )
+    )
+
+    assert [event.stage.value for event in progress_sink.events] == [
+        "thinking",
+        "writing",
+        "done",
+    ]
 
 
 def test_stream_answer_strips_inline_citations_while_streaming() -> None:
@@ -353,19 +415,87 @@ def test_stream_answer_captures_pre_expansion_signals_before_neighbor_expansion(
     assert signals.score_gap_post_expansion == pytest.approx(0.001)
 
 
-def test_stream_answer_confidence_gate_avoids_unverified_grounding() -> None:
-    pipeline, llm = _make_pipeline(retrieval_confidence_top_score=0.999)
-    events = list(pipeline.stream_answer(question="Explain photosynthesis", history=[]))
+def test_stream_answer_confidence_gate_avoids_unverified_grounding_for_non_stem() -> None:
+    class HistoryVectorStore(VectorStore):
+        def __init__(self) -> None:
+            self.search_calls = 0
+            self.documents = [
+                Document(
+                    id="doc-history",
+                    text="Historical evidence",
+                    metadata={
+                        "title": "History Notes",
+                        "subject": "history",
+                        "language": "fa",
+                        "grade_band": "10",
+                        "source_id": "G10-Dr-History",
+                        "page": 7,
+                        "chunk_index": 1,
+                    },
+                )
+            ]
+
+        @property
+        def size(self) -> int:
+            return len(self.documents)
+
+        def search(self, query_vector: np.ndarray, *, top_k: int, filters=None) -> list[Hit]:
+            _ = query_vector, top_k, filters
+            self.search_calls += 1
+            return [Hit(document=self.documents[0], score=0.2)]
+
+    llm = DummyLLM()
+    pipeline = RAGPipeline(
+        llm=llm,
+        embedder=DummyEmbedder(),
+        vector_store=HistoryVectorStore(),
+        corpus_version="test@1",
+        retrieval_confidence_top_score=0.999,
+    )
+    events = list(pipeline.stream_answer(question="Explain the causes of World War I", history=[]))
     answer = "".join(
         str(event["data"].get("text", ""))
         for event in events
         if event["type"] == "delta"
     )
-    assert "I can give general guidance, but I could not verify this from the textbooks." in answer
+    assert "نتوانستم این پاسخ را با اطمینان کافی از متن کتاب‌های درسی تأیید کنم" in answer
     assert llm.calls == 0
 
 
-def test_stream_answer_study_coach_skips_retrieval_and_citations() -> None:
+def test_stream_answer_weak_stem_retrieval_still_calls_llm() -> None:
+    plugin = RecordingGroundingContextPlugin()
+    pipeline, llm = _make_pipeline(
+        retrieval_confidence_top_score=0.999,
+        grounding_context_plugin=plugin,
+    )
+
+    events = list(
+        pipeline.stream_answer(
+            question="Solve Newton's second law for a 2 kg object with force 10 N.",
+            history=[],
+        )
+    )
+
+    assert any(event["type"] == "sources" for event in events)
+    assert llm.calls == 1
+    assert plugin.last_supportive_grounding is True
+
+
+def test_stream_answer_english_science_query_uses_dari_prompt() -> None:
+    pipeline, llm = _make_pipeline()
+
+    list(
+        pipeline.stream_answer(
+            question="Explain Newton's second law with one example.",
+            history=[],
+        )
+    )
+
+    assert llm.last_system_prompt is not None
+    assert "زبان پاسخ: دری." in llm.last_system_prompt
+
+
+def test_stream_answer_study_schedule_queries_now_use_grounded_retrieval() -> None:
     pipeline, _ = _make_pipeline()
     events = list(
         pipeline.stream_answer(
@@ -379,10 +509,10 @@ def test_stream_answer_study_coach_skips_retrieval_and_citations() -> None:
         if event["type"] == "delta"
     )
     assert "### References" not in answer
-    assert pipeline.vector_store.search_calls == 0  # type: ignore[attr-defined]
+    assert pipeline.vector_store.search_calls >= 1  # type: ignore[attr-defined]
 
 
-def test_stream_answer_direct_solver_skips_retrieval_and_citations() -> None:
+def test_stream_answer_solver_style_queries_now_use_grounded_retrieval() -> None:
     pipeline, _ = _make_pipeline()
     events = list(
         pipeline.stream_answer(
@@ -396,7 +526,7 @@ def test_stream_answer_direct_solver_skips_retrieval_and_citations() -> None:
         if event["type"] == "delta"
     )
     assert "### References" not in answer
-    assert pipeline.vector_store.search_calls == 0  # type: ignore[attr-defined]
+    assert pipeline.vector_store.search_calls >= 1  # type: ignore[attr-defined]
 
 
 def test_stream_answer_decomposes_broad_grounded_queries() -> None:
@@ -508,9 +638,9 @@ def test_stream_answer_uses_pdf_window_attachments_when_llm_supports_them(tmp_pa
     assert pipeline.vector_store.search_calls >= 1  # type: ignore[attr-defined]
 
 
-def test_stream_answer_topic_locator_consults_toc_index_first() -> None:
+def test_stream_answer_locator_style_queries_can_short_circuit_with_structure_lookup() -> None:
     pipeline, _ = _make_pipeline(
-        toc_index=DummyTOCIndex(),  # type: ignore[arg-type]
+        structure_lookup=DummyStructureLookup(),
     )
     events = list(
         pipeline.stream_answer(
@@ -523,10 +653,16 @@ def test_stream_answer_topic_locator_consults_toc_index_first() -> None:
     first_source = sources_event["data"][0]
     assert first_source.get("sourceId") == "G10-Dr-physic"
     assert first_source.get("page") == 18
+    answer = "".join(
+        str(event["data"].get("text", ""))
+        for event in events
+        if event["type"] == "delta"
+    )
+    assert "### مکان‌های محتمل در کتاب" in answer
 
 
-def test_stream_answer_topic_locator_front_matter_suppression_prefers_chapter_pages() -> None:
-    class TopicLocatorStore(VectorStore):
+def test_stream_answer_locator_scope_filters_dense_retrieval_to_structure_pages() -> None:
+    class TopicScopedStore(VectorStore):
         def __init__(self) -> None:
             self.search_calls = 0
             self.documents = [
@@ -578,7 +714,7 @@ def test_stream_answer_topic_locator_front_matter_suppression_prefers_chapter_pa
     pipeline = RAGPipeline(
         llm=DummyLLM(),
         embedder=DummyEmbedder(),
-        vector_store=TopicLocatorStore(),
+        vector_store=TopicScopedStore(),
         corpus_version="test@1",
         retrieval_confidence_top_score=0.1,
         local_expansion_neighbors=0,
@@ -587,11 +723,7 @@ def test_stream_answer_topic_locator_front_matter_suppression_prefers_chapter_pa
         temperature=0.2,
         temperature_min=0.0,
         temperature_max=2.0,
-        topic_locator_front_matter_policy=TopicLocatorFrontMatterPolicy(
-            enabled=True,
-            max_front_matter_page=6,
-            allow_front_matter_when_empty=False,
-        ),
+        structure_lookup=DummyStructureLookup(),
     )
 
     events = list(
@@ -605,7 +737,7 @@ def test_stream_answer_topic_locator_front_matter_suppression_prefers_chapter_pa
     assert all(source.get("page") != 1 for source in sources_event["data"])
 
 
-def test_stream_answer_chapter_routed_queries_constrain_retrieval_to_toc_span() -> None:
+def test_stream_answer_chapter_routed_queries_constrain_retrieval_to_structure_span() -> None:
     class RecordingVectorStore(VectorStore):
         def __init__(self) -> None:
             self.calls: list[dict[str, str] | None] = []
@@ -666,7 +798,7 @@ def test_stream_answer_chapter_routed_queries_constrain_retrieval_to_toc_span() 
         temperature=0.2,
         temperature_min=0.0,
         temperature_max=2.0,
-        toc_index=DummyTOCIndex(),  # type: ignore[arg-type]
+        structure_lookup=DummyStructureLookup(),
     )
 
     events = list(

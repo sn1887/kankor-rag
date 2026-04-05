@@ -4,9 +4,11 @@ from typing import List, Literal
 from fastapi import APIRouter, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from rag_core.contracts.progress import NoopProgressSink
 from rag_core.rag.citations import render_references_markdown_from_sources
 from ..chat_parsing import MessageCandidate, extract_question_and_history
 from ..auth import require_bearer_api_key
+from ..stream_progress import PendingProgressSink, parse_truthy_header, render_progress_sse
 from ..wiring import get_app_state
 
 router = APIRouter(prefix='/v1/chat', tags=['chat'])
@@ -22,6 +24,7 @@ class ChatRequest(BaseModel):
 def stream_chat(
     request: ChatRequest,
     authorization: str | None = Header(default=None, alias='Authorization'),
+    x_kankor_progress_events: str | None = Header(default=None, alias='X-Kankor-Progress-Events'),
 ) -> StreamingResponse:
     parsed = extract_question_and_history(
         [MessageCandidate(role=message.role, content=message.content) for message in request.messages]
@@ -37,8 +40,14 @@ def stream_chat(
     pipeline = state.pipeline
 
     def event_stream():
+        progress_enabled = parse_truthy_header(x_kankor_progress_events)
+        progress_sink = PendingProgressSink() if progress_enabled else NoopProgressSink()
         try:
-            for event in pipeline.stream_answer(question=question, history=history):
+            for event in pipeline.stream_answer(question=question, history=history, progress_sink=progress_sink):
+                if progress_enabled:
+                    for progress_event in progress_sink.drain():
+                        for chunk in render_progress_sse(progress_event):
+                            yield chunk
                 if event["type"] == "references":
                     data = dict(event.get("data") or {})
                     if data.get("answer_has_references_heading"):
@@ -54,10 +63,18 @@ def stream_chat(
                 yield f"event: {event['type']}\n".encode('utf-8')
                 yield f"data: {payload}\n\n".encode('utf-8')
         except Exception as exc:
+            if progress_enabled:
+                for progress_event in progress_sink.drain():
+                    for chunk in render_progress_sse(progress_event):
+                        yield chunk
             error_payload = json.dumps({'message': str(exc)}, ensure_ascii=False)
             yield b'event: error\n'
             yield f'data: {error_payload}\n\n'.encode('utf-8')
         finally:
+            if progress_enabled:
+                for progress_event in progress_sink.drain():
+                    for chunk in render_progress_sse(progress_event):
+                        yield chunk
             yield b'event: done\n'
             yield b'data: {}\n\n'
 

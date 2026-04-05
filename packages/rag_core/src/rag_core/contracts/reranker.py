@@ -7,6 +7,9 @@ from rag_core.types import Hit
 
 
 class Reranker(ABC):
+    def warmup(self) -> None:
+        return None
+
     @abstractmethod
     def rerank(
         self,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 import logging
 import math
+import time
 from typing import Any
 
 from rag_core.contracts.reranker import Reranker
@@ -17,6 +18,7 @@ class HFSequenceClassificationReranker(Reranker):
         self,
         *,
         model_name: str,
+        model_revision: str | None = None,
         max_length: int = 512,
         batch_size: int = 8,
         trust_remote_code: bool = True,
@@ -26,6 +28,7 @@ class HFSequenceClassificationReranker(Reranker):
             raise ValueError("model_name must not be empty")
 
         self.model_name = normalized_model_name
+        self.model_revision = str(model_revision or "").strip() or None
         self.max_length = max(32, int(max_length))
         self.batch_size = max(1, int(batch_size))
         self.trust_remote_code = bool(trust_remote_code)
@@ -33,11 +36,17 @@ class HFSequenceClassificationReranker(Reranker):
         self._torch: Any | None = None
         self._tokenizer: Any | None = None
         self._model: Any | None = None
+        self.last_runtime_load_ms = 0
+        self.last_call_load_ms = 0
+        self.last_call_inference_ms = 0
+        self.last_call_total_ms = 0
 
     def _load_runtime(self) -> tuple[Any, Any, Any]:
         if self._torch is not None and self._tokenizer is not None and self._model is not None:
+            self.last_runtime_load_ms = 0
             return self._torch, self._tokenizer, self._model
 
+        load_started = time.perf_counter()
         try:
             import torch
             from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -49,10 +58,12 @@ class HFSequenceClassificationReranker(Reranker):
 
         tokenizer = AutoTokenizer.from_pretrained(
             self.model_name,
+            revision=self.model_revision,
             trust_remote_code=self.trust_remote_code,
         )
         model = AutoModelForSequenceClassification.from_pretrained(
             self.model_name,
+            revision=self.model_revision,
             trust_remote_code=self.trust_remote_code,
         )
         if torch.cuda.is_available():
@@ -68,6 +79,7 @@ class HFSequenceClassificationReranker(Reranker):
         self._torch = torch
         self._tokenizer = tokenizer
         self._model = model
+        self.last_runtime_load_ms = int((time.perf_counter() - load_started) * 1000)
         logger.info(
             "Loaded HF reranker model=%s device=%s max_length=%s batch_size=%s",
             self.model_name,
@@ -76,6 +88,11 @@ class HFSequenceClassificationReranker(Reranker):
             self.batch_size,
         )
         return torch, tokenizer, model
+
+    def warmup(self) -> None:
+        # Execute a tiny forward pass so bad model/runtime configs fail during startup,
+        # not on the first user request.
+        self._score_pairs([("warmup", "warmup")])
 
     @staticmethod
     def _sigmoid(value: float) -> float:
@@ -130,9 +147,14 @@ class HFSequenceClassificationReranker(Reranker):
         if not normalized_query or not hits:
             return []
 
+        runtime_loaded_before = self._torch is not None and self._tokenizer is not None and self._model is not None
+        call_started = time.perf_counter()
         limit = len(hits) if top_k is None else max(1, int(top_k))
         pairs = [(normalized_query, hit.document.text) for hit in hits]
         scores = self._score_pairs(pairs)
+        self.last_call_total_ms = int((time.perf_counter() - call_started) * 1000)
+        self.last_call_load_ms = 0 if runtime_loaded_before else int(self.last_runtime_load_ms)
+        self.last_call_inference_ms = max(0, self.last_call_total_ms - self.last_call_load_ms)
         if len(scores) != len(hits):
             raise RuntimeError(
                 f"HF reranker score count mismatch: expected {len(hits)}, got {len(scores)}."

@@ -7,6 +7,7 @@ import io
 import logging
 from pathlib import Path
 import re
+import time
 from typing import Any
 
 from rag_core.rag.prompts import build_chat_messages, build_context_block
@@ -44,6 +45,7 @@ _COMPLEXITY_KEYWORDS = frozenset(
 class PreparedChatRequest:
     messages: list[ChatTurn]
     attachments: list[ChatAttachment] = field(default_factory=list)
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -71,6 +73,7 @@ class GroundingContextPlugin(ABC):
         task_directive: str,
         corpus_version: str,
         retrieval_signals: AdaptiveAttachmentRetrievalSignals | None = None,
+        supportive_grounding: bool = False,
     ) -> PreparedChatRequest:
         raise NotImplementedError
 
@@ -252,11 +255,15 @@ def _runtime_hints_block(
     task_directive: str,
     corpus_version: str,
     hit_count: int,
+    supportive_grounding: bool = False,
 ) -> str:
     runtime_hints: list[str] = []
     if corpus_version.strip():
         runtime_hints.append(f"- corpus_version: {corpus_version.strip()}")
     runtime_hints.append(f"- retrieved_sources: {max(0, int(hit_count))}")
+    runtime_hints.append(
+        f"- grounding_mode: {'supportive_stem' if supportive_grounding else 'strict_grounded'}"
+    )
     if task_directive.strip():
         runtime_hints.append(f"- task_mode: {task_directive.strip()}")
     block = "\n".join(runtime_hints)
@@ -277,6 +284,7 @@ class TextGroundingContextPlugin(GroundingContextPlugin):
         task_directive: str,
         corpus_version: str,
         retrieval_signals: AdaptiveAttachmentRetrievalSignals | None = None,
+        supportive_grounding: bool = False,
     ) -> PreparedChatRequest:
         _ = retrieval_signals
         context_block = build_context_block(hits) if grounded else ""
@@ -289,6 +297,7 @@ class TextGroundingContextPlugin(GroundingContextPlugin):
             task_directive=task_directive,
             corpus_version=corpus_version,
             hit_count=len(hits) if grounded else None,
+            supportive_grounding=supportive_grounding,
         )
         return PreparedChatRequest(messages=messages)
 
@@ -481,6 +490,7 @@ class PdfWindowGroundingContextPlugin(GroundingContextPlugin):
         for idx, hit, pdf_path, start_page, end_page in candidates:
             if len(attachments) >= decision.count:
                 break
+            meta = hit.document.metadata
             bytes_data = self._extract_pdf_window(
                 reader_cache=reader_cache,
                 pdf_path=pdf_path,
@@ -516,6 +526,7 @@ class PdfWindowGroundingContextPlugin(GroundingContextPlugin):
         task_directive: str,
         corpus_version: str,
         retrieval_signals: AdaptiveAttachmentRetrievalSignals | None = None,
+        supportive_grounding: bool = False,
     ) -> PreparedChatRequest:
         if not grounded:
             messages = build_chat_messages(
@@ -527,17 +538,26 @@ class PdfWindowGroundingContextPlugin(GroundingContextPlugin):
                 task_directive=task_directive,
                 corpus_version=corpus_version,
                 hit_count=None,
+                supportive_grounding=supportive_grounding,
             )
             return PreparedChatRequest(messages=messages)
 
+        attachment_started = time.perf_counter()
         attached_hits, attachments = self._attachments_for_hits(
             question=question,
             intent=intent,
             hits=hits,
             retrieval_signals=retrieval_signals,
         )
+        attachment_prep_ms = int((time.perf_counter() - attachment_started) * 1000)
+        attachment_diagnostics = {
+            "attachment_prep_ms": attachment_prep_ms,
+            "attachment_count": len(attachments),
+            "attachment_bytes_total": sum(len(attachment.data) for attachment in attachments),
+            "attachment_fallback_to_text": False,
+        }
         if not attachments:
-            return TextGroundingContextPlugin().build(
+            request = TextGroundingContextPlugin().build(
                 question=question,
                 history=history,
                 hits=hits,
@@ -546,19 +566,34 @@ class PdfWindowGroundingContextPlugin(GroundingContextPlugin):
                 task_directive=task_directive,
                 corpus_version=corpus_version,
                 retrieval_signals=retrieval_signals,
+                supportive_grounding=supportive_grounding,
             )
+            attachment_diagnostics["attachment_fallback_to_text"] = True
+            request.diagnostics.update(attachment_diagnostics)
+            return request
 
         context_outline = _build_pdf_outline(attached_hits)
         runtime_prefix = _runtime_hints_block(
             task_directive=task_directive,
             corpus_version=corpus_version,
             hit_count=len(hits),
+            supportive_grounding=supportive_grounding,
         )
+        grounding_instruction = (
+            "برای ادعاهای factual فقط از PDFهای ضمیمه‌شده استفاده کن. "
+            "اگر شواهد کافی نبود، محدودیت را صریح بگو. "
+        )
+        if supportive_grounding:
+            grounding_instruction = (
+                "اگر PDFهای ضمیمه‌شده برای فرمول، تعریف یا مثال مفید بودند از آن‌ها استفاده کن. "
+                "اگر PDFها دقیقاً همان سوال را پوشش نمی‌دادند، مسئله را مستقیم حل کن و فقط ادعاهای "
+                "مبتنی بر PDF را به عنوان شواهد کتابی در نظر بگیر. "
+            )
         user_prompt = (
             f"پنجره‌های PDF ضمیمه‌شده:\n{context_outline}\n\n"
             f"پرسش کاربر: {question}\n\n"
             f"{runtime_prefix}"
-            "برای ادعاهای factual فقط از PDFهای ضمیمه‌شده استفاده کن. "
+            f"{grounding_instruction}"
             "در متن پاسخ هیچ ارجاع درون‌متنی مانند [S1] تولید نکن و بخش «منابع/References» هم نساز. "
             "پاسخ را Markdown و آموزشی نگه دار."
         )
@@ -567,4 +602,5 @@ class PdfWindowGroundingContextPlugin(GroundingContextPlugin):
         return PreparedChatRequest(
             messages=messages,
             attachments=attachments,
+            diagnostics=attachment_diagnostics,
         )

@@ -54,6 +54,37 @@ class _FakePipelineWithRefs(_FakePipeline):
         }
 
 
+class _FakePipelineWithDiagnostics(_FakePipeline):
+    def stream_answer(
+        self,
+        *,
+        question: str,
+        history,
+        max_new_tokens=None,
+        temperature=None,
+        diagnostics=None,
+        diagnostic_overrides=None,
+    ):
+        _ = history, max_new_tokens, temperature
+        if diagnostics is not None:
+            diagnostics.update(
+                {
+                    "intent": "grounded_textbook",
+                    "pipeline_total_ms": 77,
+                    "retrieval_total_ms": 11,
+                    "rerank_total_ms": 22,
+                    "reranker_timeout": True,
+                    "reranker_degraded": True,
+                    "attachment_prep_ms": 33,
+                    "llm_ttft_ms": 44,
+                    "llm_completion_ms": 55,
+                    "no_token_emitted": False,
+                }
+            )
+        yield {"type": "sources", "data": [{"badge": "S1"}]}
+        yield {"type": "delta", "data": {"text": f"echo: {question}"}}
+
+
 class _FakeSettings:
     rag_openai_compat_api_key = None
     active_llm_model_id = "gpt-4o-mini"
@@ -63,6 +94,29 @@ class _FakeSettings:
 def _patch_state(monkeypatch) -> None:
     state = SimpleNamespace(settings=_FakeSettings(), pipeline=_FakePipeline())
     monkeypatch.setattr(openai_compat, "get_app_state", lambda: state)
+
+
+class _CapturedStreamingResponse:
+    def __init__(self, content, *, media_type: str | None = None, headers: dict | None = None):
+        self.body_iterator = content
+        self.media_type = media_type
+        self.headers = headers or {}
+
+
+def _collect_stream_blocks(response) -> list[dict]:
+    raw = "".join(chunk.decode("utf-8") for chunk in response.body_iterator)
+    payloads: list[dict] = []
+    for block in raw.split("\n\n"):
+        if not block.strip():
+            continue
+        for line in block.splitlines():
+            if not line.startswith("data: "):
+                continue
+            body = line.removeprefix("data: ").strip()
+            if body == "[DONE]":
+                continue
+            payloads.append(json.loads(body))
+    return payloads
 
 
 def test_chat_completions_non_stream_uses_openai_shape(monkeypatch) -> None:
@@ -169,3 +223,49 @@ def test_chat_completions_accepts_active_model_when_alias_is_set(monkeypatch) ->
     )
     payload = json.loads(response.body.decode("utf-8"))
     assert payload["model"] == "KARDAN GPT Flash"
+
+
+def test_chat_completions_non_stream_includes_opt_in_diagnostics(monkeypatch) -> None:
+    state = SimpleNamespace(settings=_FakeSettings(), pipeline=_FakePipelineWithDiagnostics())
+    monkeypatch.setattr(openai_compat, "get_app_state", lambda: state)
+
+    response = openai_compat.chat_completions(
+        openai_compat.ChatCompletionsRequest(
+            model="gpt-4o-mini",
+            messages=[openai_compat.OpenAIMessageIn(role="user", content="hello")],
+            stream=False,
+        ),
+        authorization=None,
+        x_kankor_diagnostics="true",
+    )
+
+    payload = json.loads(response.body.decode("utf-8"))
+    diagnostics = payload["kankor_diagnostics"]
+    assert diagnostics["stream"] is False
+    assert diagnostics["pipeline"]["pipeline_total_ms"] == 77
+    assert diagnostics["pipeline"]["retrieval_total_ms"] == 11
+    assert diagnostics["pipeline"]["reranker_timeout"] is True
+    assert diagnostics["pipeline"]["reranker_degraded"] is True
+    assert diagnostics["answer_length_chars"] == len("echo: hello")
+    assert diagnostics["empty_answer"] is False
+
+
+def test_chat_completions_stream_emits_opt_in_diagnostics_chunk(monkeypatch) -> None:
+    state = SimpleNamespace(settings=_FakeSettings(), pipeline=_FakePipelineWithDiagnostics())
+    monkeypatch.setattr(openai_compat, "get_app_state", lambda: state)
+    monkeypatch.setattr(openai_compat, "StreamingResponse", _CapturedStreamingResponse)
+
+    response = openai_compat.chat_completions(
+        openai_compat.ChatCompletionsRequest(
+            model="gpt-4o-mini",
+            messages=[openai_compat.OpenAIMessageIn(role="user", content="hello")],
+            stream=True,
+        ),
+        authorization=None,
+        x_kankor_diagnostics="1",
+    )
+
+    payloads = _collect_stream_blocks(response)
+    diagnostics_payload = next(payload["kankor_diagnostics"] for payload in payloads if "kankor_diagnostics" in payload)
+    assert diagnostics_payload["stream"] is True
+    assert diagnostics_payload["pipeline"]["attachment_prep_ms"] == 33

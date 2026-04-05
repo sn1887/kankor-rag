@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 
 import numpy as np
 
 from rag_core.contracts.embeddings import Embedder
 from rag_core.contracts.llm import LLMProvider
+from rag_core.contracts.structure_lookup import StructureLookup
 from rag_core.contracts.vector_store import VectorStore
-from rag_core.rag.intent_router import IntentRoute, RAGIntent
 from rag_core.rag.pipeline import RAGPipeline
 from rag_core.types import ChatAttachment, ChatTurn, Document, Hit
 
@@ -30,12 +30,6 @@ class _CountingLLM(LLMProvider):
         return iter(())
 
 
-class _StaticTopicLocatorRouter:
-    def route(self, *, question: str, history: Sequence[ChatTurn] = ()) -> IntentRoute:
-        _ = history
-        return IntentRoute(intent=RAGIntent.TOPIC_LOCATOR, retrieval_queries=[question], is_broad=False)
-
-
 class _DummyEmbedder(Embedder):
     def embed_documents(self, texts: Sequence[str]) -> np.ndarray:
         return np.zeros((len(texts), 2), dtype=np.float32)
@@ -56,18 +50,39 @@ class _SingleHitStore(VectorStore):
     def size(self) -> int:
         return 1
 
-    def search(
-        self,
-        query_vector: np.ndarray,
-        *,
-        top_k: int,
-        filters: Mapping[str, str] | None = None,
-    ) -> list[Hit]:
+    def search(self, query_vector: np.ndarray, *, top_k: int, filters=None) -> list[Hit]:
         _ = query_vector, top_k, filters
         return [self._hit]
 
 
-def test_topic_locator_uses_deterministic_responder_and_skips_llm() -> None:
+class _StaticStructureLookup(StructureLookup):
+    def search(self, *, question: str, top_k: int = 5) -> list[Hit]:
+        _ = question, top_k
+        return [
+            Hit(
+                document=Document(
+                    id="topic-1",
+                    text="حرکت یک بعدی",
+                    metadata={
+                        "title": "G10-Dr-physic",
+                        "subject": "physics",
+                        "language": "fa",
+                        "grade_band": "10",
+                        "source_id": "G10-Dr-physic",
+                        "page": 10,
+                        "start_page": 10,
+                        "end_page": 12,
+                        "chapter_number": "2",
+                        "chapter_title": "حرکت",
+                        "lookup_kind": "topic",
+                    },
+                ),
+                score=0.95,
+            )
+        ]
+
+
+def test_locator_style_query_uses_deterministic_structure_response_and_skips_llm() -> None:
     llm = _CountingLLM()
     pipeline = RAGPipeline(
         llm=llm,
@@ -92,8 +107,7 @@ def test_topic_locator_uses_deterministic_responder_and_skips_llm() -> None:
             )
         ),
         corpus_version="test",
-        intent_router=_StaticTopicLocatorRouter(),  # type: ignore[arg-type]
-        topic_locator_response_mode="deterministic",
+        structure_lookup=_StaticStructureLookup(),
         min_score=0.0,
     )
 
@@ -106,8 +120,6 @@ def test_topic_locator_uses_deterministic_responder_and_skips_llm() -> None:
     answer = "".join(event["data"]["text"] for event in events if event["type"] == "delta")
 
     assert llm.calls == 0
-    assert "[S1" not in answer
-    assert "### References" not in answer
-    assert "### منابع" not in answer
+    assert "### مکان‌های محتمل در کتاب" in answer
     refs_event = next(event for event in events if event["type"] == "references")
     assert refs_event["data"].get("sources")

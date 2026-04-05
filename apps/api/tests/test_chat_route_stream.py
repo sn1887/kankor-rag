@@ -4,18 +4,33 @@ import json
 from types import SimpleNamespace
 
 from fastapi.responses import StreamingResponse
+from rag_core.contracts.progress import ProgressEvent, ProgressStage
 
 from kankor_api.routes import chat
 
 
 class _FakePipeline:
-    def stream_answer(self, *, question: str, history):
+    def stream_answer(self, *, question: str, history, progress_sink=None):
+        if progress_sink is not None:
+            progress_sink.emit(
+                ProgressEvent(
+                    stage=ProgressStage.THINKING,
+                    message="Thinking...",
+                )
+            )
         yield {"type": "sources", "data": [{"badge": "S1"}]}
         yield {"type": "delta", "data": {"text": f"reply:{question}"}}
 
 
 class _FakePipelineWithRefs(_FakePipeline):
-    def stream_answer(self, *, question: str, history):
+    def stream_answer(self, *, question: str, history, progress_sink=None):
+        if progress_sink is not None:
+            progress_sink.emit(
+                ProgressEvent(
+                    stage=ProgressStage.READING,
+                    message="Reading sources...",
+                )
+            )
         yield {"type": "sources", "data": [{"badge": "S7"}]}
         yield {"type": "delta", "data": {"text": f"reply:{question}"}}
         yield {
@@ -99,3 +114,20 @@ def test_chat_stream_renders_clean_references_and_keeps_sources_payload(monkeypa
     assert "[S" not in delta_text
     assert "@2026.03-demo" not in delta_text
     assert sources_payload == [{"badge": "S7"}]
+
+
+def test_chat_stream_emits_opt_in_progress_events(monkeypatch) -> None:
+    state = SimpleNamespace(settings=_FakeSettings(), pipeline=_FakePipeline())
+    monkeypatch.setattr(chat, "get_app_state", lambda: state)
+    monkeypatch.setattr(chat, "StreamingResponse", _CapturedStreamingResponse)
+
+    response = chat.stream_chat(
+        chat.ChatRequest(messages=[chat.MessageIn(role="user", content="question")]),
+        authorization=None,
+        x_kankor_progress_events="true",
+    )
+
+    events = _collect_sse_events(response)
+    assert events[0][0] == "progress"
+    assert events[0][1]["stage"] == "thinking"
+    assert next(payload for event_type, payload in events if event_type == "delta") == {"text": "reply:question"}
