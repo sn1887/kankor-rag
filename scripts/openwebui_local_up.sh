@@ -44,7 +44,12 @@ echo "  RAG_CONTEXT_MODE=${RAG_CONTEXT_MODE:-text}"
 echo "  RAG_TIMING_DEBUG=${RAG_TIMING_DEBUG}"
 echo "  RAG_INDEX_PATH=${RAG_INDEX_PATH:-/app/data/sample_index/index.faiss}"
 echo "  RAG_DOCSTORE_PATH=${RAG_DOCSTORE_PATH:-/app/data/sample_index/metadata.jsonl}"
+echo "  RAG_CHAPTER_INDEX_PATH=${RAG_CHAPTER_INDEX_PATH:-<auto-or-empty>}"
+echo "  RAG_TOPIC_INDEX_PATH=${RAG_TOPIC_INDEX_PATH:-<auto-or-empty>}"
+echo "  RAG_BGE_M3_MODEL_ID=${RAG_BGE_M3_MODEL_ID:-<default-or-empty>}"
+echo "  RAG_BGE_M3_DEVICE=${RAG_BGE_M3_DEVICE:-<auto-or-empty>}"
 echo "  RAG_TOC_MANIFEST_PATH=${RAG_TOC_MANIFEST_PATH:-<auto-or-empty>}"
+echo "  OPENWEBUI_FUNCTIONS_DIR=${ROOT_DIR}/openwebui/functions"
 
 PASSTHRU_ARGS=("$@")
 DETACHED=0

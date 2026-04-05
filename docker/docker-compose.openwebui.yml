@@ -9,10 +9,13 @@ services:
       BACKEND_HOST: 0.0.0.0
       BACKEND_PORT: 8000
       HF_TOKEN: ${HF_TOKEN:-}
+      HF_HOME: /root/.cache/huggingface
       RAG_OPENAI_COMPAT_API_KEY: ${RAG_OPENAI_COMPAT_API_KEY:-changeme}
       RAG_OPENAI_COMPAT_MODEL_ALIAS: ${RAG_OPENAI_COMPAT_MODEL_ALIAS:-}
       RAG_INDEX_PATH: ${RAG_INDEX_PATH:-/app/data/sample_index/index.faiss}
       RAG_DOCSTORE_PATH: ${RAG_DOCSTORE_PATH:-/app/data/sample_index/metadata.jsonl}
+      RAG_CHAPTER_INDEX_PATH: ${RAG_CHAPTER_INDEX_PATH:-}
+      RAG_TOPIC_INDEX_PATH: ${RAG_TOPIC_INDEX_PATH:-}
       RAG_TOC_MANIFEST_PATH: ${RAG_TOC_MANIFEST_PATH:-}
       RAG_VECTOR_STORE_BACKEND: ${RAG_VECTOR_STORE_BACKEND:-faiss}
       RAG_LLM_BACKEND: ${RAG_LLM_BACKEND:-openai}
@@ -21,6 +24,11 @@ services:
       RAG_PDF_WINDOW_MAX_ATTACHMENTS: ${RAG_PDF_WINDOW_MAX_ATTACHMENTS:-3}
       RAG_PDF_WINDOW_MAX_PAGES_PER_ATTACHMENT: ${RAG_PDF_WINDOW_MAX_PAGES_PER_ATTACHMENT:-4}
       RAG_EMBEDDING_BACKEND: ${RAG_EMBEDDING_BACKEND:-hash}
+      RAG_BGE_M3_MODEL_ID: ${RAG_BGE_M3_MODEL_ID:-BAAI/bge-m3}
+      RAG_BGE_M3_BATCH_SIZE: ${RAG_BGE_M3_BATCH_SIZE:-32}
+      RAG_BGE_M3_USE_FP16: ${RAG_BGE_M3_USE_FP16:-}
+      RAG_BGE_M3_DEVICE: ${RAG_BGE_M3_DEVICE:-}
+      RAG_BGE_M3_MAX_LENGTH: ${RAG_BGE_M3_MAX_LENGTH:-8192}
       RAG_OPENAI_MODEL_ID: ${RAG_OPENAI_MODEL_ID:-gpt-4o-mini}
       RAG_OPENAI_EMBEDDING_MODEL_ID: ${RAG_OPENAI_EMBEDDING_MODEL_ID:-text-embedding-3-small}
       RAG_OPENAI_API_KEY: ${RAG_OPENAI_API_KEY:-}
@@ -54,11 +62,13 @@ services:
       RAG_USE_V6_RETRIEVAL: "false"
       RAG_V6_PAGE_LOCALIZATION_MIN_CONFIDENCE: ${RAG_V6_PAGE_LOCALIZATION_MIN_CONFIDENCE:-0.4}
       RAG_RERANKER_ENABLED: ${RAG_RERANKER_ENABLED:-false}
-      RAG_RERANKER_BACKEND: ${RAG_RERANKER_BACKEND:-hf_cross_encoder}
-      RAG_RERANKER_MODEL_ID: ${RAG_RERANKER_MODEL_ID:-BAAI/bge-reranker-v2-m3}
-      RAG_RERANKER_CANDIDATE_POOL_SIZE: ${RAG_RERANKER_CANDIDATE_POOL_SIZE:-20}
-      RAG_RERANKER_MAX_LENGTH: ${RAG_RERANKER_MAX_LENGTH:-512}
+      RAG_RERANKER_BACKEND: ${RAG_RERANKER_BACKEND:-onnx_cross_encoder}
+      RAG_RERANKER_MODEL_ID: ${RAG_RERANKER_MODEL_ID:-onnx-community/gte-multilingual-reranker-base}
+      RAG_RERANKER_MODEL_REVISION: ${RAG_RERANKER_MODEL_REVISION:-5807a06097ed1e68331fec2201751ccaf356d96b}
+      RAG_RERANKER_CANDIDATE_POOL_SIZE: ${RAG_RERANKER_CANDIDATE_POOL_SIZE:-8}
+      RAG_RERANKER_MAX_LENGTH: ${RAG_RERANKER_MAX_LENGTH:-256}
       RAG_RERANKER_BATCH_SIZE: ${RAG_RERANKER_BATCH_SIZE:-8}
+      RAG_RERANKER_TIMEOUT_MS: ${RAG_RERANKER_TIMEOUT_MS:-1500}
       RAG_TOC_ROUTING_MODE: ${RAG_TOC_ROUTING_MODE:-safe_topic_aware}
       RAG_TOC_TRACE_SAMPLE_RATE: ${RAG_TOC_TRACE_SAMPLE_RATE:-1.0}
       RAG_TIMING_DEBUG: ${RAG_TIMING_DEBUG:-false}
@@ -67,6 +77,7 @@ services:
       - ../data:/app/data:ro
       - ../apps/api:/app/apps/api:ro
       - ../packages:/app/packages:ro
+      - huggingface-cache:/root/.cache/huggingface
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
       interval: 30s
@@ -95,10 +106,13 @@ services:
       BACKEND_HOST: 0.0.0.0
       BACKEND_PORT: 8000
       HF_TOKEN: ${HF_TOKEN:-}
+      HF_HOME: /root/.cache/huggingface
       RAG_OPENAI_COMPAT_API_KEY: ${RAG_OPENAI_COMPAT_API_KEY:-changeme}
       RAG_OPENAI_COMPAT_MODEL_ALIAS: ${RAG_OPENAI_COMPAT_MODEL_ALIAS:-}
       RAG_INDEX_PATH: ${RAG_INDEX_PATH:-/app/data/sample_index/index.faiss}
       RAG_DOCSTORE_PATH: ${RAG_DOCSTORE_PATH:-/app/data/sample_index/metadata.jsonl}
+      RAG_CHAPTER_INDEX_PATH: ${RAG_CHAPTER_INDEX_PATH:-}
+      RAG_TOPIC_INDEX_PATH: ${RAG_TOPIC_INDEX_PATH:-}
       RAG_TOC_MANIFEST_PATH: ${RAG_TOC_MANIFEST_PATH:-}
       RAG_VECTOR_STORE_BACKEND: ${RAG_VECTOR_STORE_BACKEND:-faiss}
       RAG_LLM_BACKEND: ${RAG_LLM_BACKEND:-openai}
@@ -107,6 +121,11 @@ services:
       RAG_PDF_WINDOW_MAX_ATTACHMENTS: ${RAG_PDF_WINDOW_MAX_ATTACHMENTS:-3}
       RAG_PDF_WINDOW_MAX_PAGES_PER_ATTACHMENT: ${RAG_PDF_WINDOW_MAX_PAGES_PER_ATTACHMENT:-4}
       RAG_EMBEDDING_BACKEND: ${RAG_EMBEDDING_BACKEND:-hash}
+      RAG_BGE_M3_MODEL_ID: ${RAG_BGE_M3_MODEL_ID:-BAAI/bge-m3}
+      RAG_BGE_M3_BATCH_SIZE: ${RAG_BGE_M3_BATCH_SIZE:-32}
+      RAG_BGE_M3_USE_FP16: ${RAG_BGE_M3_USE_FP16:-}
+      RAG_BGE_M3_DEVICE: ${RAG_BGE_M3_DEVICE:-}
+      RAG_BGE_M3_MAX_LENGTH: ${RAG_BGE_M3_MAX_LENGTH:-8192}
       RAG_OPENAI_MODEL_ID: ${RAG_OPENAI_MODEL_ID:-gpt-4o-mini}
       RAG_OPENAI_EMBEDDING_MODEL_ID: ${RAG_OPENAI_EMBEDDING_MODEL_ID:-text-embedding-3-small}
       RAG_OPENAI_API_KEY: ${RAG_OPENAI_API_KEY:-}
@@ -160,11 +179,13 @@ services:
       RAG_USE_V6_RETRIEVAL: "false"
       RAG_V6_PAGE_LOCALIZATION_MIN_CONFIDENCE: ${RAG_V6_PAGE_LOCALIZATION_MIN_CONFIDENCE:-0.4}
       RAG_RERANKER_ENABLED: ${RAG_RERANKER_ENABLED:-false}
-      RAG_RERANKER_BACKEND: ${RAG_RERANKER_BACKEND:-hf_cross_encoder}
-      RAG_RERANKER_MODEL_ID: ${RAG_RERANKER_MODEL_ID:-BAAI/bge-reranker-v2-m3}
-      RAG_RERANKER_CANDIDATE_POOL_SIZE: ${RAG_RERANKER_CANDIDATE_POOL_SIZE:-20}
-      RAG_RERANKER_MAX_LENGTH: ${RAG_RERANKER_MAX_LENGTH:-512}
+      RAG_RERANKER_BACKEND: ${RAG_RERANKER_BACKEND:-onnx_cross_encoder}
+      RAG_RERANKER_MODEL_ID: ${RAG_RERANKER_MODEL_ID:-onnx-community/gte-multilingual-reranker-base}
+      RAG_RERANKER_MODEL_REVISION: ${RAG_RERANKER_MODEL_REVISION:-5807a06097ed1e68331fec2201751ccaf356d96b}
+      RAG_RERANKER_CANDIDATE_POOL_SIZE: ${RAG_RERANKER_CANDIDATE_POOL_SIZE:-8}
+      RAG_RERANKER_MAX_LENGTH: ${RAG_RERANKER_MAX_LENGTH:-256}
       RAG_RERANKER_BATCH_SIZE: ${RAG_RERANKER_BATCH_SIZE:-8}
+      RAG_RERANKER_TIMEOUT_MS: ${RAG_RERANKER_TIMEOUT_MS:-1500}
       RAG_TOC_ROUTING_MODE: ${RAG_TOC_ROUTING_MODE:-safe_topic_aware}
       RAG_TOC_TRACE_SAMPLE_RATE: ${RAG_TOC_TRACE_SAMPLE_RATE:-1.0}
       RAG_TIMING_DEBUG: ${RAG_TIMING_DEBUG:-false}
@@ -173,6 +194,7 @@ services:
       - ../data:/app/data:ro
       - ../apps/api:/app/apps/api:ro
       - ../packages:/app/packages:ro
+      - huggingface-cache:/root/.cache/huggingface
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
       interval: 30s
@@ -219,7 +241,7 @@ services:
       OPENAI_API_KEY: ${RAG_OPENAI_COMPAT_API_KEY:-changeme}
       OPENAI_API_KEYS: ${RAG_OPENAI_COMPAT_API_KEY:-changeme}
     ports:
-      - '127.0.0.1:3000:8080'
+      - '3000:8080'
     logging:
       driver: "json-file"
       options:
@@ -227,7 +249,9 @@ services:
         max-file: "3"
     volumes:
       - openwebui-data:/app/backend/data
+      - ../openwebui/functions:/app/backend/data/functions:ro
 
 volumes:
   openwebui-data:
   redis-data:
+  huggingface-cache:
