@@ -1,0 +1,238 @@
+{
+  "chunk_test_root": "data/Chunk_test/new questions",
+  "source_rows_total": 1500,
+  "source_rows_included": 1470,
+  "rows_total": 4410,
+  "qrels_total": 4410,
+  "language_counts": {
+    "en": 1470,
+    "fa": 1470,
+    "ps": 1470
+  },
+  "filtered_reason_counts": {
+    "missing_pdf_page_range": 30
+  },
+  "files": [
+    {
+      "file": "grade 10/Computer.json",
+      "source_id": "G10-Dr-Computer",
+      "subject": "computer_science",
+      "rows_total": 100,
+      "source_rows_included": 98,
+      "suite_rows_emitted": 294,
+      "rows_filtered": 2,
+      "filtered_reason_counts": {
+        "missing_pdf_page_range": 2
+      },
+      "language_counts": {
+        "en": 98,
+        "fa": 98,
+        "ps": 98
+      }
+    },
+    {
+      "file": "grade 10/Dari.json",
+      "source_id": "G10-Dr-Dari",
+      "subject": "dari",
+      "rows_total": 100,
+      "source_rows_included": 98,
+      "suite_rows_emitted": 294,
+      "rows_filtered": 2,
+      "filtered_reason_counts": {
+        "missing_pdf_page_range": 2
+      },
+      "language_counts": {
+        "en": 98,
+        "fa": 98,
+        "ps": 98
+      }
+    },
+    {
+      "file": "grade 10/Geography.json",
+      "source_id": "G10-Dr-Geography",
+      "subject": "geography",
+      "rows_total": 100,
+      "source_rows_included": 98,
+      "suite_rows_emitted": 294,
+      "rows_filtered": 2,
+      "filtered_reason_counts": {
+        "missing_pdf_page_range": 2
+      },
+      "language_counts": {
+        "en": 98,
+        "fa": 98,
+        "ps": 98
+      }
+    },
+    {
+      "file": "grade 10/chemistry.json",
+      "source_id": "G10-Dr-Chemistry",
+      "subject": "chemistry",
+      "rows_total": 200,
+      "source_rows_included": 196,
+      "suite_rows_emitted": 588,
+      "rows_filtered": 4,
+      "filtered_reason_counts": {
+        "missing_pdf_page_range": 4
+      },
+      "language_counts": {
+        "en": 196,
+        "fa": 196,
+        "ps": 196
+      }
+    },
+    {
+      "file": "grade 10/civic.json",
+      "source_id": "G10-Dr-Civic",
+      "subject": "civic_education",
+      "rows_total": 100,
+      "source_rows_included": 98,
+      "suite_rows_emitted": 294,
+      "rows_filtered": 2,
+      "filtered_reason_counts": {
+        "missing_pdf_page_range": 2
+      },
+      "language_counts": {
+        "en": 98,
+        "fa": 98,
+        "ps": 98
+      }
+    },
+    {
+      "file": "grade 10/geology.json",
+      "source_id": "G10-Dr-Geology",
+      "subject": "geology",
+      "rows_total": 100,
+      "source_rows_included": 98,
+      "suite_rows_emitted": 294,
+      "rows_filtered": 2,
+      "filtered_reason_counts": {
+        "missing_pdf_page_range": 2
+      },
+      "language_counts": {
+        "en": 98,
+        "fa": 98,
+        "ps": 98
+      }
+    },
+    {
+      "file": "grade 10/history.json",
+      "source_id": "G10-Dr-History",
+      "subject": "history",
+      "rows_total": 100,
+      "source_rows_included": 98,
+      "suite_rows_emitted": 294,
+      "rows_filtered": 2,
+      "filtered_reason_counts": {
+        "missing_pdf_page_range": 2
+      },
+      "language_counts": {
+        "en": 98,
+        "fa": 98,
+        "ps": 98
+      }
+    },
+    {
+      "file": "grade 10/islamicHanafi.json",
+      "source_id": "G10-Dr-Islamic_Study_hanafi",
+      "subject": "islamic_studies",
+      "rows_total": 100,
+      "source_rows_included": 98,
+      "suite_rows_emitted": 294,
+      "rows_filtered": 2,
+      "filtered_reason_counts": {
+        "missing_pdf_page_range": 2
+      },
+      "language_counts": {
+        "en": 98,
+        "fa": 98,
+        "ps": 98
+      }
+    },
+    {
+      "file": "grade 10/islamicJafari.json",
+      "source_id": "G10-Dr-Islamic_Study_jafari",
+      "subject": "islamic_studies",
+      "rows_total": 100,
+      "source_rows_included": 98,
+      "suite_rows_emitted": 294,
+      "rows_filtered": 2,
+      "filtered_reason_counts": {
+        "missing_pdf_page_range": 2
+      },
+      "language_counts": {
+        "en": 98,
+        "fa": 98,
+        "ps": 98
+      }
+    },
+    {
+      "file": "grade 10/math.json",
+      "source_id": "G10-Dr-Math",
+      "subject": "math",
+      "rows_total": 100,
+      "source_rows_included": 98,
+      "suite_rows_emitted": 294,
+      "rows_filtered": 2,
+      "filtered_reason_counts": {
+        "missing_pdf_page_range": 2
+      },
+      "language_counts": {
+        "en": 98,
+        "fa": 98,
+        "ps": 98
+      }
+    },
+    {
+      "file": "grade 10/oushto.json",
+      "source_id": "G10-Dr-Pashto",
+      "subject": "pashto",
+      "rows_total": 100,
+      "source_rows_included": 98,
+      "suite_rows_emitted": 294,
+      "rows_filtered": 2,
+      "filtered_reason_counts": {
+        "missing_pdf_page_range": 2
+      },
+      "language_counts": {
+        "en": 98,
+        "fa": 98,
+        "ps": 98
+      }
+    },
+    {
+      "file": "grade 10/physics.json",
+      "source_id": "G10-Dr-physic",
+      "subject": "physics",
+      "rows_total": 200,
+      "source_rows_included": 196,
+      "suite_rows_emitted": 588,
+      "rows_filtered": 4,
+      "filtered_reason_counts": {
+        "missing_pdf_page_range": 4
+      },
+      "language_counts": {
+        "en": 196,
+        "fa": 196,
+        "ps": 196
+      }
+    },
+    {
+      "file": "grade 10/tafsir.json",
+      "source_id": "G10-Dr-Tafseer",
+      "subject": "tafseer",
+      "rows_total": 100,
+      "source_rows_included": 98,
+      "suite_rows_emitted": 294,
+      "rows_filtered": 2,
+      "filtered_reason_counts": {
+        "missing_pdf_page_range": 2
+      },
+      "language_counts": {
+        "en": 98,
+        "fa": 98,
+        "ps": 98
+      }
+    }
+  ]
+}

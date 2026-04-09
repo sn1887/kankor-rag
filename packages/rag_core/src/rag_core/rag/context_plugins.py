@@ -594,7 +594,8 @@ class PdfWindowGroundingContextPlugin(GroundingContextPlugin):
             f"پرسش کاربر: {question}\n\n"
             f"{runtime_prefix}"
             f"{grounding_instruction}"
-            "در متن پاسخ هیچ ارجاع درون‌متنی مانند [S1] تولید نکن و بخش «منابع/References» هم نساز. "
+            "برای ادعاهای مستند از ارجاع کوتاه درون‌متنی مانند [۱] استفاده کن. "
+            "از قالب‌های فنی مانند [S1] استفاده نکن و بخش «منابع/References» هم نساز. "
             "پاسخ را Markdown و آموزشی نگه دار."
         )
         messages = list(history)

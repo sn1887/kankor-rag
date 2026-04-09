@@ -19,11 +19,9 @@ from rag_core.rag.adaptive_retrieval import (
     expand_local_window_hits,
 )
 from rag_core.rag.citations import (
+    CitationPolicy,
     DEFAULT_SOURCE_PDF_URL_TEMPLATE,
-    InlineCitationStripper,
     answer_includes_references_heading,
-    hits_to_source_payload,
-    select_reference_sources_for_answer,
 )
 from rag_core.rag.context_plugins import (
     AdaptiveAttachmentRetrievalSignals,
@@ -131,6 +129,7 @@ class RAGPipeline:
         retrieval_confidence_min_hits: int = 1,
         retrieval_oos_top_score_threshold: float | None = None,
         references_max_sources: int = 3,
+        citation_policy: CitationPolicy | None = None,
         lexical_min_score: float = 0.01,
         rrf_k: int = 20,
         retrieval_engine: PageRetrievalEngine | None = None,
@@ -183,6 +182,7 @@ class RAGPipeline:
             else None
         )
         self.references_max_sources = max(1, int(references_max_sources))
+        self.citation_policy = citation_policy or CitationPolicy()
         self.retrieval_engine = retrieval_engine or PageRetrievalEngine(
             dense_retriever=DenseRetriever(
                 embedder=self.embedder,
@@ -555,9 +555,9 @@ class RAGPipeline:
                         self._diag_set(diagnostics, "structure_lookup_selected", structure_route.document.id)
                         self._diag_set(diagnostics, "structure_lookup_selected_score", float(structure_route.score))
                         if locator_style and float(structure_route.score) >= 0.75:
-                            source_payload = hits_to_source_payload(
-                                locator_hits[: self.top_k],
-                                self.corpus_version,
+                            source_payload = self.citation_policy.build_source_payload(
+                                hits=locator_hits[: self.top_k],
+                                corpus_version=self.corpus_version,
                                 source_pdf_url_template=self.source_pdf_url_template,
                             )
                             progress.reading(
@@ -575,7 +575,7 @@ class RAGPipeline:
                                 )
                                 yield {"type": "delta", "data": {"text": raw_answer}}
                             if source_payload:
-                                selected_sources, strategy = select_reference_sources_for_answer(
+                                selection = self.citation_policy.select_reference_sources_for_answer(
                                     raw_answer=raw_answer,
                                     cleaned_answer=raw_answer,
                                     sources=source_payload,
@@ -584,8 +584,8 @@ class RAGPipeline:
                                 yield {
                                     "type": "references",
                                     "data": {
-                                        "sources": selected_sources,
-                                        "strategy": strategy,
+                                        "sources": selection.sources,
+                                        "strategy": selection.strategy,
                                         "answer_has_references_heading": answer_includes_references_heading(raw_answer),
                                     },
                                 }
@@ -695,9 +695,9 @@ class RAGPipeline:
                     return
 
             source_payload = (
-                hits_to_source_payload(
-                    hits,
-                    self.corpus_version,
+                self.citation_policy.build_source_payload(
+                    hits=hits,
+                    corpus_version=self.corpus_version,
                     source_pdf_url_template=self.source_pdf_url_template,
                 )
                 if self._should_retrieve(intent)
@@ -720,7 +720,7 @@ class RAGPipeline:
                             first_fallback_delta = False
                         yield {"type": "delta", "data": {"text": token + " "}}
                     if source_payload:
-                        selected_sources, strategy = select_reference_sources_for_answer(
+                        selection = self.citation_policy.select_reference_sources_for_answer(
                             raw_answer=raw_answer,
                             cleaned_answer=raw_answer,
                             sources=source_payload,
@@ -729,8 +729,8 @@ class RAGPipeline:
                         yield {
                             "type": "references",
                             "data": {
-                                "sources": selected_sources,
-                                "strategy": strategy,
+                                "sources": selection.sources,
+                                "strategy": selection.strategy,
                                 "answer_has_references_heading": answer_includes_references_heading(raw_answer),
                             },
                         }
@@ -784,8 +784,8 @@ class RAGPipeline:
 
             self._diag_set(diagnostics, "llm_start_offset_ms", int((time.perf_counter() - request_started) * 1000))
             raw_chunks: list[str] = []
-            cleaned_chunks: list[str] = []
-            stripper = InlineCitationStripper()
+            visible_chunks: list[str] = []
+            citation_processor = self.citation_policy.create_answer_stream_processor()
             llm_started = time.perf_counter()
             first_delta_recorded = False
             progress.writing(metadata={"intent": intent.value, "source_count": len(source_payload), "response_mode": "llm"})
@@ -798,24 +798,24 @@ class RAGPipeline:
                     attachments=request.attachments,
                 ):
                     raw_chunks.append(token)
-                    cleaned_piece = stripper.feed(token)
-                    if cleaned_piece:
+                    visible_piece = citation_processor.feed(token)
+                    if visible_piece:
                         if not first_delta_recorded:
                             first_delta_recorded = True
                             self._diag_set(diagnostics, "llm_ttft_ms", int((time.perf_counter() - llm_started) * 1000))
                             self._diag_set(diagnostics, "first_delta_offset_ms", int((time.perf_counter() - request_started) * 1000))
                             self._diag_set(diagnostics, "no_token_emitted", False)
-                        cleaned_chunks.append(cleaned_piece)
-                        yield {"type": "delta", "data": {"text": cleaned_piece}}
+                        visible_chunks.append(visible_piece)
+                        yield {"type": "delta", "data": {"text": visible_piece}}
 
-                tail = stripper.flush()
+                tail = citation_processor.flush()
                 if tail:
                     if not first_delta_recorded:
                         first_delta_recorded = True
                         self._diag_set(diagnostics, "llm_ttft_ms", int((time.perf_counter() - llm_started) * 1000))
                         self._diag_set(diagnostics, "first_delta_offset_ms", int((time.perf_counter() - request_started) * 1000))
                         self._diag_set(diagnostics, "no_token_emitted", False)
-                    cleaned_chunks.append(tail)
+                    visible_chunks.append(tail)
                     yield {"type": "delta", "data": {"text": tail}}
             finally:
                 if not first_delta_recorded:
@@ -827,18 +827,18 @@ class RAGPipeline:
 
             if self._should_retrieve(intent) and source_payload:
                 raw_answer = "".join(raw_chunks)
-                cleaned_answer = "".join(cleaned_chunks)
-                selected_sources, strategy = select_reference_sources_for_answer(
+                visible_answer = "".join(visible_chunks)
+                selection = self.citation_policy.select_reference_sources_for_answer(
                     raw_answer=raw_answer,
-                    cleaned_answer=cleaned_answer,
+                    cleaned_answer=visible_answer,
                     sources=source_payload,
                     max_sources=self.references_max_sources,
                 )
                 yield {
                     "type": "references",
                     "data": {
-                        "sources": selected_sources,
-                        "strategy": strategy,
+                        "sources": selection.sources,
+                        "strategy": selection.strategy,
                         "answer_has_references_heading": answer_includes_references_heading(raw_answer),
                     },
                 }

@@ -30,13 +30,21 @@ class ChunkTestSpec:
 
 CHUNK_TEST_FILE_SPECS: dict[str, ChunkTestSpec] = {
     "grade 10/chemistry.json": ChunkTestSpec(source_id="G10-Dr-Chemistry", subject="chemistry"),
+    "grade 10/Computer.json": ChunkTestSpec(source_id="G10-Dr-Computer", subject="computer_science"),
     "grade 10/civic.json": ChunkTestSpec(source_id="G10-Dr-Civic", subject="civic_education"),
     "grade 10/cpmputer.json": ChunkTestSpec(source_id="G10-Dr-Computer", subject="computer_science"),
+    "grade 10/Dari.json": ChunkTestSpec(source_id="G10-Dr-Dari", subject="dari"),
+    "grade 10/Geography.json": ChunkTestSpec(source_id="G10-Dr-Geography", subject="geography"),
     "grade 10/geography.json": ChunkTestSpec(source_id="G10-Dr-Geography", subject="geography"),
     "grade 10/geology.json": ChunkTestSpec(source_id="G10-Dr-Geology", subject="geology"),
     "grade 10/history.json": ChunkTestSpec(source_id="G10-Dr-History", subject="history"),
+    "grade 10/islamicHanafi.json": ChunkTestSpec(source_id="G10-Dr-Islamic_Study_hanafi", subject="islamic_studies"),
+    "grade 10/islamicJafari.json": ChunkTestSpec(source_id="G10-Dr-Islamic_Study_jafari", subject="islamic_studies"),
     "grade 10/islamic hanafi.json": ChunkTestSpec(source_id="G10-Dr-Islamic_Study_hanafi", subject="islamic_studies"),
     "grade 10/islamic jafari.json": ChunkTestSpec(source_id="G10-Dr-Islamic_Study_jafari", subject="islamic_studies"),
+    "grade 10/math.json": ChunkTestSpec(source_id="G10-Dr-Math", subject="math"),
+    "grade 10/oushto.json": ChunkTestSpec(source_id="G10-Dr-Pashto", subject="pashto"),
+    "grade 10/physics.json": ChunkTestSpec(source_id="G10-Dr-physic", subject="physics"),
     "grade 10/pushto.json": ChunkTestSpec(source_id="G10-Dr-Pashto", subject="pashto"),
     "grade 10/tafsir.json": ChunkTestSpec(source_id="G10-Dr-Tafseer", subject="tafseer"),
     "grade 11/Dari.json": ChunkTestSpec(source_id="G11-Dr-Dari", subject="dari"),
@@ -122,6 +130,34 @@ def _english_question_value(row: dict[str, Any]) -> tuple[str, str]:
         if value:
             return value, field_name
     return "", ""
+
+
+def _localized_answer_text(row: dict[str, Any], *, language: str) -> str:
+    language_specific_fields = {
+        "fa": ("answer_text_dari", "answer_dari"),
+        "ps": ("answer_text_pashto", "answer_pashto"),
+        "en": ("answer_text_english", "answer_english"),
+    }
+    for field_name in language_specific_fields.get(language, ()):
+        value = _clean_text(row.get(field_name))
+        if value:
+            return value
+    for field_name in ("answer_text", "answer"):
+        value = _clean_text(row.get(field_name))
+        if value:
+            return value
+    return ""
+
+
+def _reasoning_type_value(row: dict[str, Any]) -> str:
+    singular = _clean_text(row.get("reasoning_type"))
+    if singular:
+        return singular
+    plural = row.get("reasoning_types")
+    if isinstance(plural, list):
+        values = [_clean_text(item) for item in plural if _clean_text(item)]
+        return ", ".join(values)
+    return _clean_text(plural)
 
 
 def iter_language_variants(row: dict[str, Any]) -> list[tuple[str, str, str]]:
@@ -218,7 +254,6 @@ def build_chunk_test_rows(*, chunk_test_root: Path) -> tuple[list[dict[str, Any]
                     f"chunk_v2_{_slugify(spec.source_id)}_{normalized_row_id}_dup{file_row_id_counts[normalized_row_id]}"
                 )
             section_title = _clean_text(row.get("section_title"))
-            answer_text = _clean_text(row.get("answer_text"))
             evidence_snippet = _clean_text(row.get("evidence_snippet"))
             validation_note = _clean_text(row.get("validation_note"))
             final_check = _clean_text(row.get("final_check"))
@@ -245,16 +280,28 @@ def build_chunk_test_rows(*, chunk_test_root: Path) -> tuple[list[dict[str, Any]
                         "origin_file": _relative_key(path, chunk_test_root),
                         "source_id": spec.source_id,
                         "section_title": section_title,
-                        "answer_text": answer_text,
+                        "answer_text": _localized_answer_text(row, language=language),
                         "evidence_snippet": evidence_snippet,
                         "validation_note": validation_note,
                         "variant_language_source": source_field,
                         "correct_option": _clean_text(row.get("correct_option")),
                         "options": dict(row.get("options") or {}),
-                        "reasoning_type": _clean_text(row.get("reasoning_type")),
+                        "reasoning_type": _reasoning_type_value(row),
                         "is_multihop": bool(row.get("is_multihop")) if "is_multihop" in row else None,
                         "source_row_id": raw_id,
                         "final_check": final_check,
+                        "gold_book": _clean_text(row.get("gold_book")),
+                        "primary_question_type": _clean_text(row.get("primary_question_type")),
+                        "retrieval_difficulties": list(row.get("retrieval_difficulties") or []),
+                        "difficulty": _clean_text(row.get("difficulty")),
+                        "evidence_shape": _clean_text(row.get("evidence_shape")),
+                        "answerability": _clean_text(row.get("answerability")),
+                        "expected_topk": _clean_text(row.get("expected_topk")),
+                        "expected_evidence_count": _clean_text(row.get("expected_evidence_count")),
+                        "printed_page_start": _coerce_positive_int(row.get("printed_page_start")),
+                        "printed_page_end": _coerce_positive_int(row.get("printed_page_end")),
+                        "supporting_pdf_pages": list(row.get("supporting_pdf_pages") or []),
+                        "supporting_printed_pages": list(row.get("supporting_printed_pages") or []),
                     }
                 )
                 qrel_rows.append(

@@ -27,6 +27,19 @@ def test_lookup_chunk_test_spec_handles_known_file_names() -> None:
     assert spec_grade_12.source_id == "G12-Dr-Islamic_Study_Hanafi"
 
 
+def test_lookup_chunk_test_spec_handles_new_grade_10_file_names() -> None:
+    module = _load_module()
+    root = Path("data/Chunk_test/new questions")
+
+    spec_pashto = module.lookup_chunk_test_spec(root / "grade 10" / "oushto.json", root)
+    assert spec_pashto.source_id == "G10-Dr-Pashto"
+    assert spec_pashto.subject == "pashto"
+
+    spec_physics = module.lookup_chunk_test_spec(root / "grade 10" / "physics.json", root)
+    assert spec_physics.source_id == "G10-Dr-physic"
+    assert spec_physics.subject == "physics"
+
+
 def test_iter_language_variants_uses_english_fallback_fields() -> None:
     module = _load_module()
     row = {
@@ -40,6 +53,25 @@ def test_iter_language_variants_uses_english_fallback_fields() -> None:
         ("ps", "پوښتنه پښتو", "question_pashto"),
         ("en", "English fallback", "english_question"),
     ]
+
+
+def test_localized_answer_text_prefers_language_specific_fields() -> None:
+    module = _load_module()
+    row = {
+        "answer_text": "Generic answer",
+        "answer_text_dari": "جواب دری",
+        "answer_text_pashto": "پښتو ځواب",
+        "answer_text_english": "English answer",
+    }
+    assert module._localized_answer_text(row, language="fa") == "جواب دری"
+    assert module._localized_answer_text(row, language="ps") == "پښتو ځواب"
+    assert module._localized_answer_text(row, language="en") == "English answer"
+
+
+def test_reasoning_type_value_supports_plural_list() -> None:
+    module = _load_module()
+    row = {"reasoning_types": ["fact_lookup", "comparison"]}
+    assert module._reasoning_type_value(row) == "fact_lookup, comparison"
 
 
 def test_classify_source_row_filters_frontmatter_metadata_queries() -> None:
@@ -69,14 +101,16 @@ def test_build_chunk_test_rows_expands_multilingual_rows_and_qrels(tmp_path) -> 
             "question_english": "English question",
             "correct_option": "A",
             "options": {"A": "جواب"},
-            "answer_text": "جواب",
+            "answer_text_dari": "جواب دری",
+            "answer_text_pashto": "ځواب پښتو",
+            "answer_text_english": "English answer",
             "pdf_page_start": 12,
             "pdf_page_end": 13,
             "section_title": "درس",
             "evidence_snippet": "شاهد",
             "validation_note": "ok",
             "final_check": "ok",
-            "reasoning_type": "Fact_Lookup",
+            "reasoning_types": ["Fact_Lookup"],
             "is_multihop": False,
         }
     ]
@@ -94,6 +128,8 @@ def test_build_chunk_test_rows_expands_multilingual_rows_and_qrels(tmp_path) -> 
         "chunk_v2_g12_dr_biology_q014_ps",
         "chunk_v2_g12_dr_biology_q014_en",
     ]
+    assert [row["answer_text"] for row in suite_rows] == ["جواب دری", "ځواب پښتو", "English answer"]
+    assert [row["reasoning_type"] for row in suite_rows] == ["Fact_Lookup", "Fact_Lookup", "Fact_Lookup"]
     assert summary["language_counts"] == {"en": 1, "fa": 1, "ps": 1}
     assert summary["rows_total"] == 3
     assert summary["qrels_total"] == 3

@@ -24,6 +24,9 @@ def _sample_hit() -> Hit:
                 "grade_band": "10",
                 "language": "fa",
                 "chunk_index": 0,
+                "resolved_chapter_title": "حجره",
+                "resolved_chapter_number": "1",
+                "resolved_topic_title": "ساختمان حجره",
             },
         ),
         score=0.9,
@@ -39,19 +42,22 @@ def test_build_system_prompt_includes_exam_and_citation_contract() -> None:
     )
     assert "آمادگی کانکور" in prompt
     assert "سوال تمرینی" in prompt
-    assert "ارجاع درون‌متنی" in prompt
+    assert "ارجاع کوتاه درون‌متنی مانند [۱] یا [۱، ۲]" in prompt
+    assert "فقط از شماره‌های منبعی استفاده کنید که در context همین پاسخ آمده‌اند" in prompt
     assert "زبان پاسخ: دری." in prompt
     assert "هرگز پاسخ را به انگلیسی ننویسید" in prompt
 
 
 def test_build_context_block_exposes_reference_metadata() -> None:
     block = build_context_block([_sample_hit()])
-    assert "[S1] source_id=G10-Dr-Biology" in block
+    assert "[۱] source_id=G10-Dr-Biology" in block
     assert "title=G10 Biology" in block
     assert "source_type=worked_example" in block
     assert "page=7" in block
     assert "start_page=7" in block
     assert "end_page=7" in block
+    assert "chapter=حجره" in block
+    assert "topic=ساختمان حجره" in block
 
 
 def test_build_system_prompt_adds_stepwise_stem_solver_directive() -> None:
@@ -87,6 +93,7 @@ def test_build_system_prompt_supportive_grounding_for_stem_queries() -> None:
         supportive_grounding=True,
     )
     assert "اگر متن بازیابی‌شده دقیقاً همان سوال را پوشش نمی‌داد" in prompt
+    assert "فقط از شماره‌های منبعی استفاده کنید که در context همین پاسخ آمده‌اند" in prompt
     assert "زبان پاسخ: دری." in prompt
 
 
@@ -105,6 +112,7 @@ def test_build_chat_messages_supportive_grounding_uses_sources_as_support() -> N
     message = messages[-1].content
     assert "grounding_mode: supportive_stem" in message
     assert "اگر متن بازیابی‌شده دقیقاً همان سوال را پوشش نمی‌داد، مسئله را مستقیم حل کن" in message
+    assert "برای ادعاهای مستند از ارجاع کوتاه درون‌متنی مانند [۱] یا [۱، ۲] استفاده کن" in message
 
 
 def test_build_task_directive_adds_mcq_language_rule() -> None:

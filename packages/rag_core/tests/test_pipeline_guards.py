@@ -297,7 +297,7 @@ def test_stream_answer_emits_smalltalk_progress_without_retrieval() -> None:
     ]
 
 
-def test_stream_answer_strips_inline_citations_while_streaming() -> None:
+def test_stream_answer_localizes_inline_citations_while_streaming() -> None:
     class CitingLLM(LLMProvider):
         def stream_chat(
             self,
@@ -324,7 +324,8 @@ def test_stream_answer_strips_inline_citations_while_streaming() -> None:
     events = list(pipeline.stream_answer(question="Explain photosynthesis", history=[]))
     answer = "".join(str(event["data"].get("text", "")) for event in events if event["type"] == "delta")
     assert "[S1" not in answer
-    assert "Answer done." in answer
+    assert "[۱]" in answer
+    assert "Answer [۱] done." in answer
     refs_event = next(event for event in events if event["type"] == "references")
     assert refs_event["data"].get("sources")
 

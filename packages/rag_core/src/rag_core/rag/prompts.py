@@ -2,6 +2,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 import re
 
+from rag_core.rag.citations import CitationBadgeFormatter
 from rag_core.types import ChatTurn, Hit
 
 
@@ -145,8 +146,8 @@ _MCQ_KEYWORDS = {
 }
 
 _GROUNDED_CITATION_FEWSHOT = (
-    "نمونهٔ کوتاهِ سبک پاسخ (بدون ارجاع درون‌متنی):\n"
-    "«قانون دوم نیوتن رابطهٔ نیرو و شتاب را بیان می‌کند و به صورت F = m a نوشته می‌شود.»\n"
+    "نمونهٔ کوتاهِ سبک پاسخ با ارجاع درون‌متنی:\n"
+    "«قانون دوم نیوتن رابطهٔ نیرو و شتاب را بیان می‌کند و به صورت F = m a نوشته می‌شود [۱].»\n"
 )
 
 
@@ -353,7 +354,7 @@ def build_system_prompt(
                 "از قالب «داده‌ها، فرمول، جایگذاری، نتیجه نهایی» استفاده کن و برای چند سوال، هر سوال را جداگانه شماره‌گذاری کن. "
                 "در این حالت ارجاع [S#] یا بخش References لازم نیست و نباید تولید شود. "
                 "اگر داده‌های مسئله ناکافی بود، دقیق بگو چه داده‌ای لازم است. "
-                "از حدس‌زدن داده‌ها یا ساختن منبع خودداری کن. "
+                "از حدس‌ زدن داده‌ها یا ساختن منبع خودداری کن. "
                 "هرگز پاسخ را به انگلیسی ننویس. حتی اگر سوال یا گزینه‌ها انگلیسی باشند، توضیح و جواب نهایی را "
                 "به زبان پاسخ بنویس و فقط فرمول‌ها، نمادها و حروف گزینه‌ها را به همان شکل اصلی نگه دار. "
                 "پاسخ را Markdown تمیز بنویس و روی جواب نهایی هر مسئله تأکید کن. "
@@ -377,7 +378,7 @@ def build_system_prompt(
     )
     if supportive_grounding:
         grounding_contract = (
-            'برای سوال‌های علوم/ریاضی، از شواهد بازیابی‌شده برای تقویت فرمول، تعریف یا مثال استفاده کنید. '
+            'برای سوال‌های علوم/ریاضی، از شواهد بازیابی‌ شده برای تقویت فرمول، تعریف یا مثال استفاده کنید. '
             'اگر متن بازیابی‌شده دقیقاً همان سوال را پوشش نمی‌داد، مسئله را مستقیم و آموزشی حل کنید، '
             'اما ادعا نکنید که جواب دقیقاً از کتاب تأیید شده مگر شواهد مستقیم داشته باشید. '
         )
@@ -386,7 +387,10 @@ def build_system_prompt(
         'شما یک دستیار دقیق آمادگی کانکور هستید. '
         'وظایف اصلی شما: توضیح روشن مفاهیم، مثال حل‌شده، و تمرین‌های فصل‌محور. '
         f'{grounding_contract}'
-        'در متن پاسخ هیچ ارجاع درون‌متنی مانند [S1] یا [S1 p.42] تولید نکنید. '
+        'برای هر ادعای factual که مستقیماً بر متن بازیابی‌شده تکیه دارد، '
+        'در پایان جمله یک ارجاع کوتاه درون‌متنی مانند [۱] یا [۱، ۲] بیاورید. '
+        'فقط از شماره‌های منبعی استفاده کنید که در context همین پاسخ آمده‌اند. '
+        'از قالب‌های فنی مانند [S1] یا [S1 p.42] استفاده نکنید. '
         'بخش «منابع/References» را هم تولید نکنید؛ سیستم در پایان پاسخ منابع را اضافه می‌کند. '
         'اگر کاربر سوال تمرینی خواست، سوال مناسب سطح و پاسخ‌کلید کوتاه ارائه کنید. '
         'هیچ واقعیت یا پاسخ‌کلید بدون پشتوانه نسازید. '
@@ -400,11 +404,16 @@ def build_system_prompt(
 
 
 def build_context_block(hits: Sequence[Hit]) -> str:
+    badge_formatter = CitationBadgeFormatter()
     lines: list[str] = []
     for idx, hit in enumerate(hits, start=1):
         meta = hit.document.metadata
+        badge = badge_formatter.to_visible_badge(f"S{idx}")
+        chapter_title = str(meta.get("resolved_chapter_title") or meta.get("chapter_title") or "").strip()
+        topic_title = str(meta.get("resolved_topic_title") or meta.get("topic_title") or "").strip()
+        chapter_number = str(meta.get("resolved_chapter_number") or "").strip()
         lines.append(
-            f"[S{idx}] source_id={meta.get('source_id', 'unknown')} "
+            f"{badge} source_id={meta.get('source_id', 'unknown')} "
             f"title={meta.get('title', 'unknown')} "
             f"page={meta.get('page', 'unknown')} "
             f"start_page={meta.get('start_page', meta.get('page', 'unknown'))} "
@@ -414,6 +423,9 @@ def build_context_block(hits: Sequence[Hit]) -> str:
             f"category={meta.get('subject_category', 'unknown')} "
             f"grade={meta.get('grade_band', 'mixed')} "
             f"language={meta.get('language', 'unknown')} "
+            f"chapter_number={chapter_number or 'unknown'} "
+            f"chapter={chapter_title or 'unknown'} "
+            f"topic={topic_title or 'unknown'} "
             f"chunk_index={meta.get('chunk_index', '0')}"
         )
         lines.append(hit.document.text.strip())
@@ -452,6 +464,8 @@ def build_chat_messages(
             runtime_prefix = f"پیکربندی اجرای همین درخواست:\n{runtime_block}\n\n"
         grounding_instruction = (
             'برای ادعاهای factual فقط از شواهد بالا استفاده کن. '
+            'هر جا به شواهد بالا تکیه می‌کنی، در پایان همان جمله ارجاعی مانند [۱] یا [۱، ۲] بگذار. '
+            'فقط از شماره‌های منبعی استفاده کن که در متن بازیابی‌شدهٔ بالا وجود دارند. '
             'اگر شواهد کافی نبود، محدودیت را صریح بگو. '
         )
         if supportive_grounding:
@@ -459,6 +473,8 @@ def build_chat_messages(
                 'اگر متن بازیابی‌شده برای حل این سوال مفید بود، از آن برای فرمول، تعریف یا مثال استفاده کن. '
                 'اگر متن بازیابی‌شده دقیقاً همان سوال را پوشش نمی‌داد، مسئله را مستقیم حل کن و فقط ادعاهای '
                 'مبتنی بر متن را به عنوان شواهد کتابی در نظر بگیر. '
+                'برای ادعاهای مستند از ارجاع کوتاه درون‌متنی مانند [۱] یا [۱، ۲] استفاده کن. '
+                'فقط از شماره‌های منبعی استفاده کن که در متن بازیابی‌شدهٔ بالا وجود دارند. '
             )
         user_prompt = (
             f'متن بازیابی‌شده:\n{context_block}\n\n'
@@ -466,7 +482,7 @@ def build_chat_messages(
             f'{runtime_prefix}'
             f'{_GROUNDED_CITATION_FEWSHOT}\n'
             f'{grounding_instruction}'
-            'در متن پاسخ هیچ ارجاع درون‌متنی مانند [S1] تولید نکن و بخش «منابع/References» هم نساز. '
+            'از قالب‌های فنی مانند [S1] استفاده نکن و بخش «منابع/References» هم نساز. '
             'پاسخ را Markdown و آموزشی نگه دار.'
         )
     elif (intent or "").strip().lower() == "study_coach":
